@@ -1,0 +1,1 @@
+Solver for Hearts card game
