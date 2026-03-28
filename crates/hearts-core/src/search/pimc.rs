@@ -7,6 +7,8 @@ use crate::belief::sampler::sample_worlds;
 use crate::card_set::CardSet;
 use crate::game::Player;
 use crate::game_state::GameState;
+use crate::solver::paranoid::ParanoidTT;
+use crate::solver::transposition::{TranspositionTable, ZobristKeys};
 use crate::solver::{maxn, paranoid};
 use crate::trick::PlayerIndex;
 use crate::types::Card;
@@ -41,7 +43,7 @@ pub fn pimc_choose(
     }
 
     let total_scores = score_moves_sequential(state, player, &moves, &worlds, solver);
-    pick_best_move(&moves, &total_scores, worlds.len())
+    pick_best_move(&moves, &total_scores)
 }
 
 /// Choose the best card via PIMC — parallel version using rayon.
@@ -69,10 +71,10 @@ pub fn pimc_choose_parallel(
     }
 
     let total_scores = score_moves_parallel(state, player, &moves, &worlds, solver);
-    pick_best_move(&moves, &total_scores, worlds.len())
+    pick_best_move(&moves, &total_scores)
 }
 
-/// Score all moves across all worlds — sequential.
+/// Score all moves across all worlds — sequential with early termination.
 fn score_moves_sequential(
     state: &GameState,
     player: PlayerIndex,
@@ -81,16 +83,31 @@ fn score_moves_sequential(
     solver: SolverType,
 ) -> Vec<f64> {
     let mut total_scores = vec![0.0f64; moves.len()];
-    for world in worlds {
+    let total_points = state.deck_config.total_points() as f64;
+
+    for (wi, world) in worlds.iter().enumerate() {
         for (mi, &mov) in moves.iter().enumerate() {
             let score = evaluate_move(state, player, mov, world, solver);
             total_scores[mi] += score as f64;
+        }
+
+        // Early termination: after half the worlds, check if one move dominates
+        if wi == worlds.len() / 2 && worlds.len() >= 4 && moves.len() > 1 {
+            let mut sorted: Vec<f64> = total_scores.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let gap = sorted[1] - sorted[0];
+            let remaining = (worlds.len() - wi - 1) as f64;
+            // Worst case: best move scores max points in all remaining worlds,
+            // second-best scores 0. If the gap exceeds that swing, best is locked in.
+            if gap > remaining * total_points {
+                break;
+            }
         }
     }
     total_scores
 }
 
-/// Score all moves across all worlds — parallel over worlds.
+/// Score all moves across all worlds — parallel over worlds with per-thread TT.
 fn score_moves_parallel(
     state: &GameState,
     player: PlayerIndex,
@@ -101,13 +118,13 @@ fn score_moves_parallel(
     let n_moves = moves.len();
 
     // Each world produces a Vec<i32> of scores per move.
-    // Collect in parallel, then sum.
+    // Each thread gets its own TT to avoid contention.
     let per_world_scores: Vec<Vec<i32>> = worlds
         .par_iter()
         .map(|world| {
             moves
                 .iter()
-                .map(|&mov| evaluate_move(state, player, mov, world, solver))
+                .map(|&mov| evaluate_move_with_tt(state, player, mov, world, solver))
                 .collect()
         })
         .collect();
@@ -122,23 +139,18 @@ fn score_moves_parallel(
     total_scores
 }
 
-/// Pick the move with the lowest average score.
-fn pick_best_move(moves: &[Card], total_scores: &[f64], n_worlds: usize) -> Card {
-    let n = n_worlds as f64;
+/// Pick the move with the lowest total score.
+fn pick_best_move(moves: &[Card], total_scores: &[f64]) -> Card {
     let (best_idx, _) = total_scores
         .iter()
         .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            let avg_a = *a / n;
-            let avg_b = *b / n;
-            avg_a.partial_cmp(&avg_b).unwrap()
-        })
+        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .unwrap();
     moves[best_idx]
 }
 
 /// Evaluate a single move in a single sampled world.
-fn evaluate_move(
+pub fn evaluate_move(
     state: &GameState,
     player: PlayerIndex,
     mov: Card,
@@ -147,12 +159,42 @@ fn evaluate_move(
 ) -> i32 {
     let mut eval_state = state.clone();
     eval_state.hands = *world;
+    // Ensure AI always uses its actual hand, not the sampled version
+    eval_state.hands[player.index()] = state.hands[player.index()];
     eval_state.play_card(mov);
 
     match solver {
         SolverType::Paranoid => paranoid::paranoid_solve(&mut eval_state, player),
         SolverType::MaxN => {
             let scores = maxn::maxn_solve(&mut eval_state);
+            scores[player.index()]
+        }
+    }
+}
+
+/// Evaluate a single move with a thread-local transposition table.
+fn evaluate_move_with_tt(
+    state: &GameState,
+    player: PlayerIndex,
+    mov: Card,
+    world: &[CardSet; 4],
+    solver: SolverType,
+) -> i32 {
+    let mut eval_state = state.clone();
+    eval_state.hands = *world;
+    eval_state.hands[player.index()] = state.hands[player.index()];
+    eval_state.play_card(mov);
+
+    match solver {
+        SolverType::Paranoid => {
+            let keys = ZobristKeys::new(0xCAFE);
+            let mut tt = ParanoidTT::new(16);
+            paranoid::paranoid_solve_with_tt(&mut eval_state, player, &mut tt, &keys)
+        }
+        SolverType::MaxN => {
+            let keys = ZobristKeys::new(0xCAFE);
+            let mut tt = TranspositionTable::new(16);
+            let scores = maxn::maxn_solve_with_tt(&mut eval_state, &mut tt, &keys);
             scores[player.index()]
         }
     }

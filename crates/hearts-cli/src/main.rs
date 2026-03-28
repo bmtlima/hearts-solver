@@ -8,6 +8,7 @@ use hearts_core::bots::solver_bot::SolverBot;
 use hearts_core::deck::DeckConfig;
 use hearts_core::game::Player;
 use hearts_core::replay;
+use hearts_core::search::pimc::{PIMCBot, SolverType};
 use hearts_core::stats;
 
 #[derive(Parser)]
@@ -32,6 +33,10 @@ struct Args {
     /// Generate an HTML replay of a single game to this file path
     #[arg(long)]
     replay: Option<String>,
+
+    /// Number of worlds for PIMC sampling (default 30)
+    #[arg(long, default_value = "30")]
+    pimc_worlds: usize,
 }
 
 fn parse_deck(s: &str) -> DeckConfig {
@@ -47,11 +52,16 @@ fn parse_deck(s: &str) -> DeckConfig {
     }
 }
 
-fn make_player(kind: &str, seed: u64) -> Box<dyn Player> {
+fn make_player(kind: &str, seed: u64, pimc_worlds: usize) -> Box<dyn Player> {
     match kind.trim().to_lowercase().as_str() {
         "random" => Box::new(RandomBot::new(StdRng::seed_from_u64(seed))),
         "rule" => Box::new(RuleBot::new()),
         "solver" => Box::new(SolverBot::new()),
+        "pimc" => Box::new(PIMCBot::new(
+            pimc_worlds,
+            SolverType::Paranoid,
+            StdRng::seed_from_u64(seed),
+        )),
         _ => {
             eprintln!("Unknown player type '{}', using rule", kind);
             Box::new(RuleBot::new())
@@ -73,11 +83,12 @@ fn main() {
         // Single-game HTML replay mode
         let mut rng = StdRng::seed_from_u64(args.seed);
         let hands = deck_config.deal(&mut rng);
+        let pw = args.pimc_worlds;
         let mut players: [Box<dyn Player>; 4] = [
-            make_player(&player_types[0], args.seed * 4),
-            make_player(&player_types[1], args.seed * 4 + 1),
-            make_player(&player_types[2], args.seed * 4 + 2),
-            make_player(&player_types[3], args.seed * 4 + 3),
+            make_player(&player_types[0], args.seed * 4, pw),
+            make_player(&player_types[1], args.seed * 4 + 1, pw),
+            make_player(&player_types[2], args.seed * 4 + 2, pw),
+            make_player(&player_types[3], args.seed * 4 + 3, pw),
         ];
         let labels = [
             player_types[0].clone(),
@@ -107,12 +118,13 @@ fn main() {
 
     let pt = player_types.clone();
     let base = args.seed;
+    let pw = args.pimc_worlds;
     let game_stats = stats::run_batch(deck_config, args.games, move |seed| {
         [
-            make_player(&pt[0], base + seed * 4),
-            make_player(&pt[1], base + seed * 4 + 1),
-            make_player(&pt[2], base + seed * 4 + 2),
-            make_player(&pt[3], base + seed * 4 + 3),
+            make_player(&pt[0], base + seed * 4, pw),
+            make_player(&pt[1], base + seed * 4 + 1, pw),
+            make_player(&pt[2], base + seed * 4 + 2, pw),
+            make_player(&pt[3], base + seed * 4 + 3, pw),
         ]
     }, args.seed);
 
