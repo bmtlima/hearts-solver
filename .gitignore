@@ -20,4 +20,4 @@ logs/
 .claude/session-pids.json
 .claude/hooks/log-attribution.sh
 
-more_logs/
+.claude

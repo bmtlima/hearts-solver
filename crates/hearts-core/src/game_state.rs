@@ -8,6 +8,8 @@ use crate::types::{Card, Suit};
 pub struct TrickResult {
     pub winner: PlayerIndex,
     pub points: i32,
+    /// The 4 cards played in this trick, in play order (needed for void inference).
+    pub cards: [(PlayerIndex, Card); 4],
 }
 
 /// Information needed to undo a play_card call.
@@ -159,7 +161,9 @@ impl GameState {
             let points = self.current_trick.points();
             self.points_taken[winner.index()] += points;
 
-            let result = TrickResult { winner, points };
+            let played = self.current_trick.played_cards();
+            let cards = [played[0], played[1], played[2], played[3]];
+            let result = TrickResult { winner, points, cards };
 
             // Start new trick
             self.trick_number += 1;

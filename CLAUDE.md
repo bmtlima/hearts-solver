@@ -71,6 +71,8 @@ CLI lives at `crates/hearts-cli/src/main.rs`.
 
 ## Solver Design Notes
 
-- Standard 2-player alpha-beta (negamax) does NOT work for 4-player Hearts. Use plain minimax where each player minimizes their own score.
-- Move ordering + zero-score pruning is unsafe in 4-player minimax (causes incorrect results via premature pruning). TT provides the main speedup.
-- The solver takes `&mut GameState` and uses undo-based traversal (no cloning per node).
+- **Two solvers:** Max^n (`maxn.rs`) is correct but slow. Paranoid (`paranoid.rs`) has full alpha-beta pruning, 6x faster, but pessimistic. Use Max^n for correctness testing, Paranoid for PIMC.
+- Standard 2-player negamax does NOT work for 4-player Hearts. Max^n uses plain minimax per player.
+- Move ordering + zero-score pruning is unsafe in Max^n (causes incorrect results).
+- Paranoid TT with bound types is deferred — alpha-beta pruning alone provides the main speedup.
+- All solvers take `&mut GameState` and use undo-based traversal (no cloning per node).

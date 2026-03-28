@@ -3,17 +3,18 @@ use std::cell::RefCell;
 use crate::game_state::GameState;
 use crate::solver::transposition::{TranspositionTable, ZobristKeys};
 
-/// Double-dummy solver for multiplayer Hearts.
+/// Max^n solver for multiplayer Hearts.
 ///
-/// Each player minimizes their own score. Uses minimax with:
-/// - Transposition table (optional) for memoization
-/// - Undo-based state traversal (no cloning)
-pub fn alpha_beta_solve(state: &mut GameState) -> [i32; 4] {
+/// Each player minimizes their own score independently. This is the correct
+/// solver for multiplayer games but does NOT support standard alpha-beta
+/// pruning bounds across players — only weak pruning is possible.
+/// Matches brute-force results exactly.
+pub fn maxn_solve(state: &mut GameState) -> [i32; 4] {
     solve_recursive(state, None)
 }
 
 /// Solve with a transposition table for memoization.
-pub fn alpha_beta_solve_with_tt(
+pub fn maxn_solve_with_tt(
     state: &mut GameState,
     tt: &mut TranspositionTable,
     keys: &ZobristKeys,
@@ -89,7 +90,6 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    /// THE critical test: must match brute force exactly.
     #[test]
     fn matches_brute_force_on_100_tiny_deals() {
         for seed in 0..100 {
@@ -99,13 +99,13 @@ mod tests {
             let bf_state = GameState::new_with_deal(hands.clone(), DeckConfig::Tiny);
             let bf_scores = brute_force::brute_force_solve(&bf_state);
 
-            let mut ab_state = GameState::new_with_deal(hands, DeckConfig::Tiny);
-            let ab_scores = alpha_beta_solve(&mut ab_state);
+            let mut state = GameState::new_with_deal(hands, DeckConfig::Tiny);
+            let scores = maxn_solve(&mut state);
 
             assert_eq!(
-                bf_scores, ab_scores,
-                "seed {}: brute_force={:?} != alpha_beta={:?}",
-                seed, bf_scores, ab_scores
+                bf_scores, scores,
+                "seed {}: brute_force={:?} != maxn={:?}",
+                seed, bf_scores, scores
             );
         }
     }
@@ -124,12 +124,12 @@ mod tests {
 
             tt.clear();
             let mut state = GameState::new_with_deal(hands, DeckConfig::Tiny);
-            let tt_scores = alpha_beta_solve_with_tt(&mut state, &mut tt, &keys);
+            let scores = maxn_solve_with_tt(&mut state, &mut tt, &keys);
 
             assert_eq!(
-                bf_scores, tt_scores,
-                "seed {}: brute_force={:?} != tt_solver={:?}",
-                seed, bf_scores, tt_scores
+                bf_scores, scores,
+                "seed {}: brute_force={:?} != maxn_tt={:?}",
+                seed, bf_scores, scores
             );
         }
     }
@@ -180,45 +180,18 @@ mod tests {
     }
 
     #[test]
-    fn faster_than_brute_force() {
-        let mut rng = StdRng::seed_from_u64(42);
-        let hands = DeckConfig::Tiny.deal(&mut rng);
-        let bf_state = GameState::new_with_deal(hands.clone(), DeckConfig::Tiny);
-
-        let start_bf = std::time::Instant::now();
-        for _ in 0..100 {
-            let _ = brute_force::brute_force_solve(&bf_state);
-        }
-        let bf_time = start_bf.elapsed();
-
-        let start_ab = std::time::Instant::now();
-        for _ in 0..100 {
-            let mut state = GameState::new_with_deal(hands.clone(), DeckConfig::Tiny);
-            let _ = alpha_beta_solve(&mut state);
-        }
-        let ab_time = start_ab.elapsed();
-
-        println!("Brute force: {:?}, Alpha-beta+undo: {:?}", bf_time, ab_time);
-    }
-
-    #[test]
-    fn tt_faster_than_no_tt_on_small() {
+    fn tt_on_small() {
         let keys = ZobristKeys::new(42);
         let mut rng = StdRng::seed_from_u64(99);
         let hands = DeckConfig::Small.deal(&mut rng);
 
-        let start_no_tt = std::time::Instant::now();
         let mut state1 = GameState::new_with_deal(hands.clone(), DeckConfig::Small);
-        let scores_no_tt = alpha_beta_solve(&mut state1);
-        let no_tt_time = start_no_tt.elapsed();
+        let scores_no_tt = maxn_solve(&mut state1);
 
         let mut tt = TranspositionTable::new(20);
-        let start_tt = std::time::Instant::now();
         let mut state2 = GameState::new_with_deal(hands, DeckConfig::Small);
-        let scores_tt = alpha_beta_solve_with_tt(&mut state2, &mut tt, &keys);
-        let tt_time = start_tt.elapsed();
+        let scores_tt = maxn_solve_with_tt(&mut state2, &mut tt, &keys);
 
         assert_eq!(scores_no_tt, scores_tt);
-        println!("Small deck - No TT: {:?}, With TT: {:?}", no_tt_time, tt_time);
     }
 }
