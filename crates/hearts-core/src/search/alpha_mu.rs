@@ -343,6 +343,84 @@ mod tests {
     }
 
     #[test]
+    fn alpha_mu_better_worst_case_than_pimc() {
+        // Strategy-fusion validation: when PIMC and Alpha-Mu disagree,
+        // Alpha-Mu's choice should have a better (lower) worst-case score
+        // across the sampled worlds.
+        use crate::search::pimc;
+
+        let mut am_better = 0;
+        let mut pimc_better = 0;
+        let mut agree = 0;
+
+        for seed in 0..200u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let hands = DeckConfig::Small.deal(&mut rng);
+            let mut state = GameState::new_with_deal(hands, DeckConfig::Small);
+
+            // Play a few cards to get past forced first-trick leads
+            // into more interesting mid-game positions
+            for _ in 0..4 {
+                if state.is_game_over() { break; }
+                let legal = state.legal_moves();
+                let card = legal.cards().next().unwrap();
+                state.play_card(card);
+            }
+            if state.is_game_over() { continue; }
+
+            let player = state.current_player;
+            let legal = state.legal_moves();
+            let moves: Vec<Card> = legal.cards().collect();
+
+            if moves.len() <= 1 {
+                continue;
+            }
+
+            // Same worlds for both
+            let mut rng1 = StdRng::seed_from_u64(seed * 100);
+            let pimc_card = pimc::pimc_choose(&state, player, 30, SolverType::Paranoid, &mut rng1);
+
+            let mut rng2 = StdRng::seed_from_u64(seed * 100);
+            let am_card = alpha_mu_choose(&state, player, 30, SolverType::Paranoid, &mut rng2);
+
+            if pimc_card == am_card {
+                agree += 1;
+                continue;
+            }
+
+            // They disagree — check worst-case scores in the sampled worlds
+            let obs = Observation::from_game_state(&state, player);
+            let mut rng3 = StdRng::seed_from_u64(seed * 100);
+            let worlds = sample_worlds(&obs, 30, &mut rng3);
+            let scores = compute_score_matrix(&state, player, &moves, &worlds, SolverType::Paranoid);
+
+            let pimc_idx = moves.iter().position(|&m| m == pimc_card).unwrap();
+            let am_idx = moves.iter().position(|&m| m == am_card).unwrap();
+
+            let pimc_worst = scores.iter().map(|ws| ws[pimc_idx]).max().unwrap();
+            let am_worst = scores.iter().map(|ws| ws[am_idx]).max().unwrap();
+
+            if am_worst < pimc_worst {
+                am_better += 1;
+            } else if pimc_worst < am_worst {
+                pimc_better += 1;
+            }
+        }
+
+        let total_tested = am_better + pimc_better + agree;
+        println!(
+            "Tested={}, Agree={}, Disagree: AM better worst-case={}, PIMC better={}",
+            total_tested, agree, am_better, pimc_better
+        );
+        // Alpha-Mu should have better worst-case at least as often as PIMC
+        assert!(
+            am_better >= pimc_better,
+            "Alpha-Mu should have better worst-case in disagreements: am={} pimc={}",
+            am_better, pimc_better
+        );
+    }
+
+    #[test]
     fn parameter_sweep() {
         let lambdas = [0.0, 0.25, 0.5, 0.75, 1.0];
         let games = 200;
