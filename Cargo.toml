@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/hearts-core", "crates/hearts-cli"]
+resolver = "2"

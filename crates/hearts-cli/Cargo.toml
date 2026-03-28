@@ -1,0 +1,9 @@
+[package]
+name = "hearts-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hearts-core = { path = "../hearts-core" }
+clap = { version = "=4.5.23", features = ["derive"] }
+rand = "0.8"
