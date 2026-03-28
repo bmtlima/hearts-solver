@@ -6,11 +6,13 @@ use crate::types::Card;
 /// Pre-computed random values for each (player, card) pair.
 pub struct ZobristKeys {
     /// keys[player][card_bit_position]
-    card_keys: [[u64; 52]; 4],
+    pub card_keys: [[u64; 52]; 4],
     /// Key for current player
     player_keys: [u64; 4],
     /// Keys for cards in the current trick (position 0..3, card bit)
     trick_keys: [[u64; 52]; 4],
+    /// Keys for points taken per player: points_keys[player][points 0..=26]
+    points_keys: [[u64; 27]; 4],
 }
 
 impl ZobristKeys {
@@ -41,15 +43,52 @@ impl ZobristKeys {
             }
         }
 
+        let mut points_keys = [[0u64; 27]; 4];
+        for p in 0..4 {
+            for pts in 0..27 {
+                points_keys[p][pts] = next();
+            }
+        }
+
         ZobristKeys {
             card_keys,
             player_keys,
             trick_keys,
+            points_keys,
         }
     }
 
-    fn card_index(card: Card) -> usize {
+    pub fn card_index(card: Card) -> usize {
         card.suit().index() * 13 + card.bit_index() as usize
+    }
+
+    /// Compute the hands-only component of the hash (used once at the top-level call).
+    pub fn hash_hands(&self, hands: &[CardSet; 4]) -> u64 {
+        let mut h = 0u64;
+        for p in 0..4 {
+            for card in hands[p].cards() {
+                h ^= self.card_keys[p][Self::card_index(card)];
+            }
+        }
+        h
+    }
+
+    /// Compute the non-hand components: current_player, trick cards, points_taken.
+    pub fn hash_context(
+        &self,
+        current_player: PlayerIndex,
+        trick_cards: &[(PlayerIndex, Card)],
+        points_taken: &[i32; 4],
+    ) -> u64 {
+        let mut h = 0u64;
+        h ^= self.player_keys[current_player.index()];
+        for (pos, (_, card)) in trick_cards.iter().enumerate() {
+            h ^= self.trick_keys[pos][Self::card_index(*card)];
+        }
+        for p in 0..4 {
+            h ^= self.points_keys[p][points_taken[p] as usize];
+        }
+        h
     }
 
     pub fn hash_position(
@@ -57,6 +96,7 @@ impl ZobristKeys {
         hands: &[CardSet; 4],
         current_player: PlayerIndex,
         trick_cards: &[(PlayerIndex, Card)],
+        points_taken: &[i32; 4],
     ) -> u64 {
         let mut h = 0u64;
 
@@ -73,6 +113,11 @@ impl ZobristKeys {
         // Hash cards in current trick
         for (pos, (_, card)) in trick_cards.iter().enumerate() {
             h ^= self.trick_keys[pos][Self::card_index(*card)];
+        }
+
+        // Hash points taken per player (needed for moon-shooting correctness)
+        for p in 0..4 {
+            h ^= self.points_keys[p][points_taken[p] as usize];
         }
 
         h
@@ -168,8 +213,23 @@ mod tests {
             CardSet::empty(),
             CardSet::empty(),
         ];
-        let h1 = keys.hash_position(&hands1, PlayerIndex::P0, &[]);
-        let h2 = keys.hash_position(&hands2, PlayerIndex::P0, &[]);
+        let pts = [0, 0, 0, 0];
+        let h1 = keys.hash_position(&hands1, PlayerIndex::P0, &[], &pts);
+        let h2 = keys.hash_position(&hands2, PlayerIndex::P0, &[], &pts);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn different_points_taken_different_hashes() {
+        let keys = ZobristKeys::new(42);
+        let hands = [
+            CardSet::from_cards([Card::new(Suit::Clubs, Rank::Ace)]),
+            CardSet::empty(),
+            CardSet::empty(),
+            CardSet::empty(),
+        ];
+        let h1 = keys.hash_position(&hands, PlayerIndex::P0, &[], &[0, 0, 0, 0]);
+        let h2 = keys.hash_position(&hands, PlayerIndex::P0, &[], &[1, 0, 0, 0]);
         assert_ne!(h1, h2);
     }
 }

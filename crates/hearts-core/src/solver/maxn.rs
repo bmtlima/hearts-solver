@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use crate::game_state::GameState;
 use crate::solver::transposition::{TranspositionTable, ZobristKeys};
 
@@ -19,34 +17,29 @@ pub fn maxn_solve_with_tt(
     tt: &mut TranspositionTable,
     keys: &ZobristKeys,
 ) -> [i32; 4] {
-    let ctx = TTContext {
-        tt: RefCell::new(tt),
-        keys,
-    };
-    solve_recursive(state, Some(&ctx))
+    solve_recursive(state, Some((tt, keys)))
 }
 
-struct TTContext<'a> {
-    tt: RefCell<&'a mut TranspositionTable>,
-    keys: &'a ZobristKeys,
-}
-
-fn solve_recursive(state: &mut GameState, ctx: Option<&TTContext>) -> [i32; 4] {
+fn solve_recursive(
+    state: &mut GameState,
+    mut tt_ctx: Option<(&mut TranspositionTable, &ZobristKeys)>,
+) -> [i32; 4] {
     if state.is_game_over() {
         return state.final_scores();
     }
 
     // TT probe
-    let hash = ctx.map(|c| {
-        c.keys.hash_position(
+    let hash = tt_ctx.as_ref().map(|(_, keys)| {
+        keys.hash_position(
             &state.hands,
             state.current_player,
             state.current_trick.played_cards(),
+            &state.points_taken,
         )
     });
 
-    if let (Some(h), Some(c)) = (hash, ctx) {
-        if let Some(entry) = c.tt.borrow().probe(h) {
+    if let (Some(h), Some((ref tt, _))) = (hash, &tt_ctx) {
+        if let Some(entry) = tt.probe(h) {
             return entry.scores;
         }
     }
@@ -55,9 +48,14 @@ fn solve_recursive(state: &mut GameState, ctx: Option<&TTContext>) -> [i32; 4] {
     let current = state.current_player.index();
     let mut best_scores: Option<[i32; 4]> = None;
 
+    // Split tt_ctx so we can pass it into recursion while borrowing
+    // We need to reborrow on each iteration since we pass &mut into recursion
     for card in legal.cards() {
         let undo = state.play_card_with_undo(card);
-        let scores = solve_recursive(state, ctx);
+        let scores = match tt_ctx {
+            Some((ref mut tt, keys)) => solve_recursive(state, Some((tt, keys))),
+            None => solve_recursive(state, None),
+        };
         state.undo_card(&undo);
 
         match best_scores {
@@ -75,8 +73,8 @@ fn solve_recursive(state: &mut GameState, ctx: Option<&TTContext>) -> [i32; 4] {
     let result = best_scores.unwrap();
 
     // TT store
-    if let (Some(h), Some(c)) = (hash, ctx) {
-        c.tt.borrow_mut().store(h, result);
+    if let (Some(h), Some((ref mut tt, _))) = (hash, tt_ctx) {
+        tt.store(h, result);
     }
 
     result

@@ -10,7 +10,7 @@ crates/
   hearts-cli/     # Binary: CLI runner for games and benchmarks
 docs/
   plan.md         # Design document (architecture, algorithms)
-  step-by-step.md # Incremental implementation plan
+  step-by-step.md # Incremental implementation plan (MAIN PLAN - READ THIS)
 ```
 
 ## Language & Build

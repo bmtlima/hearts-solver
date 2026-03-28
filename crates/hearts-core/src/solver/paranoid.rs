@@ -1,9 +1,19 @@
-use std::cell::RefCell;
+use std::sync::OnceLock;
 
 use crate::game_state::GameState;
 use crate::solver::transposition::ZobristKeys;
 use crate::trick::PlayerIndex;
 use crate::types::{Card, Rank, Suit};
+
+// ── Global ZobristKeys (computed once per process) ───────────────────────
+
+static ZOBRIST_KEYS: OnceLock<ZobristKeys> = OnceLock::new();
+
+fn global_keys() -> &'static ZobristKeys {
+    ZOBRIST_KEYS.get_or_init(|| ZobristKeys::new(0xDEAD))
+}
+
+// ── Public API ───────────────────────────────────────────────────────────
 
 /// Paranoid solver for Hearts.
 ///
@@ -11,38 +21,64 @@ use crate::types::{Card, Rank, Suit};
 /// its own score, while all 3 opponents form a coalition that maximizes
 /// the AI's score with shared perfect information.
 ///
-/// This enables standard alpha-beta pruning with full α/β bounds, giving
-/// massive speedup over Max^n. The tradeoff: paranoid search is pessimistic —
-/// it assumes opponents coordinate perfectly against you.
-///
-/// Returns the AI player's score under optimal paranoid play.
+/// Uses a transposition table internally for memoization.
 pub fn paranoid_solve(state: &mut GameState, ai_player: PlayerIndex) -> i32 {
-    paranoid_recursive(state, ai_player, i32::MIN + 1, i32::MAX, None)
+    let keys = global_keys();
+    let mut tt = ParanoidTT::new(20);
+    let hands_hash = keys.hash_hands(&state.hands);
+    paranoid_recursive(state, ai_player, i32::MIN + 1, i32::MAX, hands_hash, &mut tt, keys)
 }
 
-/// Paranoid solve with transposition table.
+/// Paranoid solve with an externally-provided transposition table.
 pub fn paranoid_solve_with_tt(
     state: &mut GameState,
     ai_player: PlayerIndex,
     tt: &mut ParanoidTT,
     keys: &ZobristKeys,
 ) -> i32 {
-    let ctx = TTContext {
-        tt: RefCell::new(tt),
-        keys,
-    };
-    paranoid_recursive(state, ai_player, i32::MIN + 1, i32::MAX, Some(&ctx))
+    let hands_hash = keys.hash_hands(&state.hands);
+    paranoid_recursive(state, ai_player, i32::MIN + 1, i32::MAX, hands_hash, tt, keys)
 }
 
-// ── Paranoid-specific transposition table with bound types ──────────────
+/// Find the best move for the AI player using paranoid search.
+/// Shares a single TT across all move evaluations for better memoization.
+pub fn paranoid_best_move(
+    state: &mut GameState,
+    ai_player: PlayerIndex,
+) -> (Card, i32) {
+    let keys = global_keys();
+    let mut tt = ParanoidTT::new(20);
+    let hands_hash = keys.hash_hands(&state.hands);
+    let legal = state.legal_moves();
+    let mut best_card = None;
+    let mut best_score = i32::MAX;
 
-/// Bound type for alpha-beta TT entries.
+    for card in legal.cards() {
+        let player_idx = state.current_player.index();
+        let card_key = keys.card_keys[player_idx][ZobristKeys::card_index(card)];
+        let new_hands_hash = hands_hash ^ card_key;
+
+        let undo = state.play_card_with_undo(card);
+        let score = paranoid_recursive(
+            state, ai_player, i32::MIN + 1, i32::MAX, new_hands_hash, &mut tt, keys,
+        );
+        state.undo_card(&undo);
+
+        if score < best_score {
+            best_score = score;
+            best_card = Some(card);
+        }
+    }
+
+    (best_card.unwrap(), best_score)
+}
+
+// ── Paranoid TT with bound types and best-move storage ───────────────────
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Bound {
     Exact,
-    /// The stored value is a lower bound (true value >= stored).
     Lower,
-    /// The stored value is an upper bound (true value <= stored).
     Upper,
 }
 
@@ -51,18 +87,15 @@ struct ParanoidTTEntry {
     hash: u64,
     score: i32,
     bound: Bound,
+    best_move: Option<Card>,
 }
 
-/// A fixed-size transposition table for paranoid (alpha-beta) search.
-/// Stores bound type alongside the score so that entries from pruned
-/// subtrees are handled correctly on re-probe.
 pub struct ParanoidTT {
     entries: Vec<Option<ParanoidTTEntry>>,
     mask: usize,
 }
 
 impl ParanoidTT {
-    /// Create a table with 2^size_bits entries.
     pub fn new(size_bits: u32) -> Self {
         let size = 1usize << size_bits;
         ParanoidTT {
@@ -76,9 +109,14 @@ impl ParanoidTT {
         self.entries[idx].as_ref().filter(|e| e.hash == hash)
     }
 
-    fn store(&mut self, hash: u64, score: i32, bound: Bound) {
+    fn store(&mut self, hash: u64, score: i32, bound: Bound, best_move: Option<Card>) {
         let idx = hash as usize & self.mask;
-        self.entries[idx] = Some(ParanoidTTEntry { hash, score, bound });
+        self.entries[idx] = Some(ParanoidTTEntry {
+            hash,
+            score,
+            bound,
+            best_move,
+        });
     }
 
     pub fn clear(&mut self) {
@@ -88,35 +126,51 @@ impl ParanoidTT {
     }
 }
 
-struct TTContext<'a> {
-    tt: RefCell<&'a mut ParanoidTT>,
-    keys: &'a ZobristKeys,
-}
+// ── Core recursive search ────────────────────────────────────────────────
 
 fn paranoid_recursive(
     state: &mut GameState,
     ai_player: PlayerIndex,
     mut alpha: i32,
     mut beta: i32,
-    ctx: Option<&TTContext>,
+    hands_hash: u64,
+    tt: &mut ParanoidTT,
+    keys: &ZobristKeys,
 ) -> i32 {
     if state.is_game_over() {
         return state.final_scores()[ai_player.index()];
     }
 
-    // TT probe
-    let hash = ctx.map(|c| {
-        c.keys.hash_position(
-            &state.hands,
+    // Compute full hash: incremental hands_hash + context from scratch
+    let hash = hands_hash
+        ^ keys.hash_context(
             state.current_player,
             state.current_trick.played_cards(),
-        )
-    });
+            &state.points_taken,
+        );
 
-    if let (Some(h), Some(c)) = (hash, ctx) {
-        if let Some(entry) = c.tt.borrow().probe(h) {
-            if entry.bound == Bound::Exact {
-                return entry.score;
+    // TT probe
+    let mut tt_best_move: Option<Card> = None;
+
+    if let Some(entry) = tt.probe(hash) {
+        tt_best_move = entry.best_move;
+        match entry.bound {
+            Bound::Exact => return entry.score,
+            Bound::Lower => {
+                if entry.score >= beta {
+                    return entry.score;
+                }
+                if entry.score > alpha {
+                    alpha = entry.score;
+                }
+            }
+            Bound::Upper => {
+                if entry.score <= alpha {
+                    return entry.score;
+                }
+                if entry.score < beta {
+                    beta = entry.score;
+                }
             }
         }
     }
@@ -124,24 +178,41 @@ fn paranoid_recursive(
     let legal = state.legal_moves();
     let is_ai_turn = state.current_player == ai_player;
 
-    // Move ordering for better pruning
-    let mut moves: Vec<_> = legal.cards().collect();
-    order_moves(&mut moves, state);
+    // Move ordering: stack-allocated array, heuristic sort, TT best move first
+    let mut moves = [Card::new(Suit::Clubs, Rank::Two); 13];
+    let mut n_moves = 0;
+    for card in legal.cards() {
+        moves[n_moves] = card;
+        n_moves += 1;
+    }
+    let moves = &mut moves[..n_moves];
+    order_moves(moves, state);
+    if let Some(tm) = tt_best_move {
+        if let Some(pos) = moves.iter().position(|&m| m == tm) {
+            moves.swap(0, pos);
+        }
+    }
 
     let orig_alpha = alpha;
     let orig_beta = beta;
 
     if is_ai_turn {
         // AI minimizes its own score (MIN node).
-        // At MIN nodes only beta is tightened; alpha stays unchanged.
         let mut best = i32::MAX;
-        for card in moves {
-            let undo = state.play_card_with_undo(card);
-            let score = paranoid_recursive(state, ai_player, alpha, beta, ctx);
+        let mut best_card: Option<Card> = None;
+        for card in moves.iter() {
+            // Compute new hands_hash BEFORE play (need current player index)
+            let player_idx = state.current_player.index();
+            let card_key = keys.card_keys[player_idx][ZobristKeys::card_index(*card)];
+            let new_hands_hash = hands_hash ^ card_key;
+
+            let undo = state.play_card_with_undo(*card);
+            let score = paranoid_recursive(state, ai_player, alpha, beta, new_hands_hash, tt, keys);
             state.undo_card(&undo);
 
             if score < best {
                 best = score;
+                best_card = Some(*card);
             }
             if best < beta {
                 beta = best;
@@ -151,33 +222,32 @@ fn paranoid_recursive(
             }
         }
 
-        // TT store: MIN node bound classification
-        //   - best <= orig_alpha → cutoff by ancestor MAX; UPPER bound
-        //   - best >= orig_beta  → no move lowered beta; LOWER bound
-        //   - otherwise          → EXACT
-        if let (Some(h), Some(c)) = (hash, ctx) {
-            let bound = if best <= orig_alpha {
-                Bound::Upper
-            } else if best >= orig_beta {
-                Bound::Lower
-            } else {
-                Bound::Exact
-            };
-            c.tt.borrow_mut().store(h, best, bound);
-        }
+        let bound = if best <= orig_alpha {
+            Bound::Upper
+        } else if best >= orig_beta {
+            Bound::Lower
+        } else {
+            Bound::Exact
+        };
+        tt.store(hash, best, bound, best_card);
 
         best
     } else {
         // Opponent coalition maximizes AI's score (MAX node).
-        // At MAX nodes only alpha is tightened; beta stays unchanged.
         let mut best = i32::MIN;
-        for card in moves {
-            let undo = state.play_card_with_undo(card);
-            let score = paranoid_recursive(state, ai_player, alpha, beta, ctx);
+        let mut best_card: Option<Card> = None;
+        for card in moves.iter() {
+            let player_idx = state.current_player.index();
+            let card_key = keys.card_keys[player_idx][ZobristKeys::card_index(*card)];
+            let new_hands_hash = hands_hash ^ card_key;
+
+            let undo = state.play_card_with_undo(*card);
+            let score = paranoid_recursive(state, ai_player, alpha, beta, new_hands_hash, tt, keys);
             state.undo_card(&undo);
 
             if score > best {
                 best = score;
+                best_card = Some(*card);
             }
             if best > alpha {
                 alpha = best;
@@ -187,41 +257,32 @@ fn paranoid_recursive(
             }
         }
 
-        // TT store: MAX node bound classification
-        //   - best <= orig_alpha → no move beat alpha; UPPER bound
-        //   - best >= orig_beta  → cutoff by ancestor MIN; LOWER bound
-        //   - otherwise          → EXACT
-        if let (Some(h), Some(c)) = (hash, ctx) {
-            let bound = if best <= orig_alpha {
-                Bound::Upper
-            } else if best >= orig_beta {
-                Bound::Lower
-            } else {
-                Bound::Exact
-            };
-            c.tt.borrow_mut().store(h, best, bound);
-        }
+        let bound = if best <= orig_alpha {
+            Bound::Upper
+        } else if best >= orig_beta {
+            Bound::Lower
+        } else {
+            Bound::Exact
+        };
+        tt.store(hash, best, bound, best_card);
 
         best
     }
 }
 
 /// Heuristic move ordering for better alpha-beta pruning.
-fn order_moves(moves: &mut Vec<Card>, state: &GameState) {
+fn order_moves(moves: &mut [Card], state: &GameState) {
     let is_leading = state.current_trick.is_empty();
     let led_suit = state.current_trick.led_suit();
 
     moves.sort_by_key(|card| {
         if is_leading {
-            // Leading: prefer low non-hearts
             let suit_penalty = if card.suit() == Suit::Hearts { 100 } else { 0 };
             suit_penalty + card.rank() as i32
         } else if let Some(led) = led_suit {
             if card.suit() == led {
-                // Following: prefer low (duck)
                 card.rank() as i32
             } else {
-                // Sloughing: dump Qs first, then high hearts, then others
                 if card.suit() == Suit::Spades && card.rank() == Rank::Queen {
                     -100
                 } else if card.suit() == Suit::Hearts {
@@ -236,34 +297,11 @@ fn order_moves(moves: &mut Vec<Card>, state: &GameState) {
     });
 }
 
-/// Find the best move for the AI player using paranoid search.
-pub fn paranoid_best_move(
-    state: &mut GameState,
-    ai_player: PlayerIndex,
-) -> (crate::types::Card, i32) {
-    let legal = state.legal_moves();
-    let mut best_card = None;
-    let mut best_score = i32::MAX;
-
-    for card in legal.cards() {
-        let undo = state.play_card_with_undo(card);
-        let score = paranoid_solve(state, ai_player);
-        state.undo_card(&undo);
-
-        if score < best_score {
-            best_score = score;
-            best_card = Some(card);
-        }
-    }
-
-    (best_card.unwrap(), best_score)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::deck::DeckConfig;
-    use crate::solver::maxn;
+    use crate::solver::{brute_force, maxn};
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
@@ -286,8 +324,6 @@ mod tests {
 
     #[test]
     fn paranoid_is_pessimistic_vs_maxn() {
-        // Paranoid score >= Max^n score for the AI player
-        // (paranoid assumes worst-case opponent coordination)
         for seed in 0..100 {
             let mut rng = StdRng::seed_from_u64(seed);
             let hands = DeckConfig::Tiny.deal(&mut rng);
@@ -309,8 +345,28 @@ mod tests {
     }
 
     #[test]
-    fn paranoid_with_tt_matches() {
-        use crate::solver::transposition::ZobristKeys;
+    fn paranoid_matches_brute_force_pessimism_on_tiny() {
+        for seed in 0..100 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let hands = DeckConfig::Tiny.deal(&mut rng);
+
+            let bf_state = GameState::new_with_deal(hands.clone(), DeckConfig::Tiny);
+            let bf_scores = brute_force::brute_force_solve(&bf_state);
+
+            let mut par_state = GameState::new_with_deal(hands, DeckConfig::Tiny);
+            let ai = par_state.current_player;
+            let par_score = paranoid_solve(&mut par_state, ai);
+
+            assert!(
+                par_score >= bf_scores[ai.index()],
+                "seed {}: paranoid {} < brute_force {} for P{} (should be >=)",
+                seed, par_score, bf_scores[ai.index()], ai.index()
+            );
+        }
+    }
+
+    #[test]
+    fn paranoid_with_external_tt_matches() {
         let keys = ZobristKeys::new(42);
         let mut tt = ParanoidTT::new(16);
 
@@ -320,16 +376,16 @@ mod tests {
 
             let mut state1 = GameState::new_with_deal(hands.clone(), DeckConfig::Tiny);
             let ai = state1.current_player;
-            let score_no_tt = paranoid_solve(&mut state1, ai);
+            let score_default = paranoid_solve(&mut state1, ai);
 
             tt.clear();
             let mut state2 = GameState::new_with_deal(hands, DeckConfig::Tiny);
-            let score_tt = paranoid_solve_with_tt(&mut state2, ai, &mut tt, &keys);
+            let score_ext_tt = paranoid_solve_with_tt(&mut state2, ai, &mut tt, &keys);
 
             assert_eq!(
-                score_no_tt, score_tt,
-                "seed {}: paranoid no_tt={} != tt={}",
-                seed, score_no_tt, score_tt
+                score_default, score_ext_tt,
+                "seed {}: default={} != external_tt={}",
+                seed, score_default, score_ext_tt
             );
         }
     }
@@ -355,7 +411,6 @@ mod tests {
 
     #[test]
     fn paranoid_handles_moon() {
-        // Paranoid should produce valid scores even in moon-shot scenarios
         let dp = DeckConfig::Tiny.total_points();
         for seed in 0..100 {
             let mut rng = StdRng::seed_from_u64(seed);
@@ -363,12 +418,25 @@ mod tests {
             let mut state = GameState::new_with_deal(hands, DeckConfig::Tiny);
             let ai = state.current_player;
             let score = paranoid_solve(&mut state, ai);
-            // Score must be in valid range even with moon possibilities
             assert!(
                 score >= 0 && score <= dp,
                 "seed {}: paranoid score {} out of range [0, {}]",
                 seed, score, dp
             );
         }
+    }
+
+    #[test]
+    fn paranoid_medium_timing() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let hands = DeckConfig::Medium.deal(&mut rng);
+
+        let start = std::time::Instant::now();
+        let mut state = GameState::new_with_deal(hands, DeckConfig::Medium);
+        let ai = state.current_player;
+        let score = paranoid_solve(&mut state, ai);
+        let elapsed = start.elapsed();
+
+        println!("Medium paranoid: score={}, time={:?}", score, elapsed);
     }
 }
