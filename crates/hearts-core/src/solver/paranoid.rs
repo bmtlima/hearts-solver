@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use crate::game_state::GameState;
 use crate::solver::transposition::ZobristKeys;
 use crate::trick::PlayerIndex;
+use crate::types::{Card, Rank, Suit};
 
 /// Paranoid solver for Hearts.
 ///
@@ -123,6 +124,10 @@ fn paranoid_recursive(
     let legal = state.legal_moves();
     let is_ai_turn = state.current_player == ai_player;
 
+    // Move ordering for better pruning
+    let mut moves: Vec<_> = legal.cards().collect();
+    order_moves(&mut moves, state);
+
     let orig_alpha = alpha;
     let orig_beta = beta;
 
@@ -130,7 +135,7 @@ fn paranoid_recursive(
         // AI minimizes its own score (MIN node).
         // At MIN nodes only beta is tightened; alpha stays unchanged.
         let mut best = i32::MAX;
-        for card in legal.cards() {
+        for card in moves {
             let undo = state.play_card_with_undo(card);
             let score = paranoid_recursive(state, ai_player, alpha, beta, ctx);
             state.undo_card(&undo);
@@ -166,7 +171,7 @@ fn paranoid_recursive(
         // Opponent coalition maximizes AI's score (MAX node).
         // At MAX nodes only alpha is tightened; beta stays unchanged.
         let mut best = i32::MIN;
-        for card in legal.cards() {
+        for card in moves {
             let undo = state.play_card_with_undo(card);
             let score = paranoid_recursive(state, ai_player, alpha, beta, ctx);
             state.undo_card(&undo);
@@ -199,6 +204,36 @@ fn paranoid_recursive(
 
         best
     }
+}
+
+/// Heuristic move ordering for better alpha-beta pruning.
+fn order_moves(moves: &mut Vec<Card>, state: &GameState) {
+    let is_leading = state.current_trick.is_empty();
+    let led_suit = state.current_trick.led_suit();
+
+    moves.sort_by_key(|card| {
+        if is_leading {
+            // Leading: prefer low non-hearts
+            let suit_penalty = if card.suit() == Suit::Hearts { 100 } else { 0 };
+            suit_penalty + card.rank() as i32
+        } else if let Some(led) = led_suit {
+            if card.suit() == led {
+                // Following: prefer low (duck)
+                card.rank() as i32
+            } else {
+                // Sloughing: dump Qs first, then high hearts, then others
+                if card.suit() == Suit::Spades && card.rank() == Rank::Queen {
+                    -100
+                } else if card.suit() == Suit::Hearts {
+                    -(card.rank() as i32)
+                } else {
+                    50 + card.rank() as i32
+                }
+            }
+        } else {
+            0
+        }
+    });
 }
 
 /// Find the best move for the AI player using paranoid search.
@@ -316,5 +351,24 @@ mod tests {
         let par_time = start_par.elapsed();
 
         println!("Small: Max^n {:?}, Paranoid {:?}", maxn_time, par_time);
+    }
+
+    #[test]
+    fn paranoid_handles_moon() {
+        // Paranoid should produce valid scores even in moon-shot scenarios
+        let dp = DeckConfig::Tiny.total_points();
+        for seed in 0..100 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let hands = DeckConfig::Tiny.deal(&mut rng);
+            let mut state = GameState::new_with_deal(hands, DeckConfig::Tiny);
+            let ai = state.current_player;
+            let score = paranoid_solve(&mut state, ai);
+            // Score must be in valid range even with moon possibilities
+            assert!(
+                score >= 0 && score <= dp,
+                "seed {}: paranoid score {} out of range [0, {}]",
+                seed, score, dp
+            );
+        }
     }
 }

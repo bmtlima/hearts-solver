@@ -89,6 +89,35 @@ mod tests {
     }
 
     #[test]
+    fn finds_moon_shooting_line() {
+        // Construct a Tiny deal where P0 can shoot the moon.
+        // P0: Ac, As, Ah — highest in each suit they hold
+        // P1: Kc, Kd, Ks
+        // P2: Qc, Ad, Qh
+        // P3: Kh, Jh, Qs
+        // P0 leads Ac (first lead = lowest club = Qc? No — let's use a deal where
+        // the leader has a strong hand)
+        // Actually, let's find a seed where moon happens naturally
+        let dp = DeckConfig::Tiny.total_points();
+        let mut found_moon = false;
+        for seed in 0..1000 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let hands = DeckConfig::Tiny.deal(&mut rng);
+            let state = GameState::new_with_deal(hands, DeckConfig::Tiny);
+            let scores = brute_force_solve(&state);
+            let total: i32 = scores.iter().sum();
+            if total == dp * 3 {
+                // Moon was shot — verify one player got 0
+                assert!(scores.iter().any(|&s| s == 0));
+                assert!(scores.iter().filter(|&&s| s == dp).count() == 3);
+                found_moon = true;
+                break;
+            }
+        }
+        assert!(found_moon, "no moon found in 1000 seeds — check deck config");
+    }
+
+    #[test]
     fn brute_force_completes_in_time() {
         // Just a smoke test that it finishes reasonably fast
         let mut rng = StdRng::seed_from_u64(42);

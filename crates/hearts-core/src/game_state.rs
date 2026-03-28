@@ -43,6 +43,7 @@ pub struct GameState {
     pub trick_number: usize,
     pub cards_played: CardSet,
     pub is_first_trick: bool,
+    pub trick_history: Vec<TrickResult>,
 }
 
 impl GameState {
@@ -57,6 +58,7 @@ impl GameState {
             trick_number: 0,
             cards_played: CardSet::empty(),
             is_first_trick: true,
+            trick_history: Vec::new(),
         }
     }
 
@@ -164,6 +166,7 @@ impl GameState {
             let played = self.current_trick.played_cards();
             let cards = [played[0], played[1], played[2], played[3]];
             let result = TrickResult { winner, points, cards };
+            self.trick_history.push(result.clone());
 
             // Start new trick
             self.trick_number += 1;
@@ -201,6 +204,11 @@ impl GameState {
             let saved_trick = self.current_trick.clone();
             let trick_number = self.trick_number;
 
+            // Push to history (will be popped on undo)
+            let played = self.current_trick.played_cards();
+            let cards = [played[0], played[1], played[2], played[3]];
+            self.trick_history.push(TrickResult { winner, points, cards });
+
             self.trick_number += 1;
             self.is_first_trick = false;
             self.current_trick = Trick::new(winner);
@@ -235,6 +243,7 @@ impl GameState {
             self.current_trick.unplay();
             self.trick_number = ct.trick_number;
             self.points_taken[ct.winner.index()] -= ct.points;
+            self.trick_history.pop();
         } else {
             self.current_trick.unplay();
         }
