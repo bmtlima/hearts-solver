@@ -4,6 +4,7 @@ use rand::SeedableRng;
 
 use hearts_core::bots::random_bot::RandomBot;
 use hearts_core::bots::rule_bot::RuleBot;
+use hearts_core::bots::solver_bot::SolverBot;
 use hearts_core::deck::DeckConfig;
 use hearts_core::game::Player;
 use hearts_core::replay;
@@ -50,6 +51,7 @@ fn make_player(kind: &str, seed: u64) -> Box<dyn Player> {
     match kind.trim().to_lowercase().as_str() {
         "random" => Box::new(RandomBot::new(StdRng::seed_from_u64(seed))),
         "rule" => Box::new(RuleBot::new()),
+        "solver" => Box::new(SolverBot::new()),
         _ => {
             eprintln!("Unknown player type '{}', using rule", kind);
             Box::new(RuleBot::new())

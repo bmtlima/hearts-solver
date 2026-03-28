@@ -37,15 +37,49 @@ impl Player for RuleBot {
 }
 
 impl RuleBot {
+    /// Returns the opponent index that could shoot the moon, if any.
+    fn moon_threat(&self, state: &GameState) -> Option<usize> {
+        let me = state.current_player.index();
+        let total_taken: i32 = state.points_taken.iter().sum();
+        if total_taken == 0 {
+            return None;
+        }
+        for p in 0..4 {
+            if p != me && state.points_taken[p] == total_taken {
+                return Some(p);
+            }
+        }
+        None
+    }
+
     /// When leading a trick.
     fn choose_lead(&self, state: &GameState, legal_moves: CardSet) -> Card {
+        // If all legal moves are hearts, lead the lowest heart
+        if legal_moves.cards().all(|c| c.suit() == Suit::Hearts) {
+            return legal_moves
+                .cards()
+                .min_by_key(|c| c.rank() as u8)
+                .unwrap();
+        }
+
+        // Moon defense: if an opponent threatens to shoot, lead a heart to bait points
+        if self.moon_threat(state).is_some() && state.hearts_broken {
+            let hearts = legal_moves.cards_of_suit(Suit::Hearts);
+            if !hearts.is_empty() {
+                return hearts
+                    .cards()
+                    .min_by_key(|c| c.rank() as u8)
+                    .unwrap();
+            }
+        }
+
         // Prefer leading low cards in short non-heart suits to probe for voids
         let mut best: Option<Card> = None;
         let mut best_key: (usize, u8) = (usize::MAX, u8::MAX);
 
         for card in legal_moves.cards() {
-            if card.suit() == Suit::Hearts && !state.hearts_broken {
-                continue; // shouldn't be in legal_moves anyway, but guard
+            if card.suit() == Suit::Hearts {
+                continue;
             }
             let suit_count = state.hands[state.current_player.index()]
                 .cards_of_suit(card.suit())
@@ -65,6 +99,19 @@ impl RuleBot {
         let in_suit = legal_moves.cards_of_suit(led_suit);
         let qs = Self::queen_of_spades();
 
+        // Moon defense: if an opponent threatens to shoot and this trick has points,
+        // try to win the trick to take those points ourselves and break the shoot.
+        if self.moon_threat(state).is_some() {
+            let trick_points = state.current_trick.points();
+            if trick_points > 0 {
+                // Play highest card in suit to try to win
+                return in_suit
+                    .cards()
+                    .max_by_key(|c| c.rank() as u8)
+                    .unwrap();
+            }
+        }
+
         // If Qs is legal and we're following spades led by someone else, dump it
         if led_suit == Suit::Spades && in_suit.contains(qs) {
             // Dump Qs if someone else might win the trick
@@ -77,7 +124,6 @@ impl RuleBot {
         // Try to duck: play highest card below the current winner
         let current_high = self.trick_high_card(state, led_suit);
         if let Some(high) = current_high {
-            // Find highest card that's still below the current winner
             let mut duck: Option<Card> = None;
             for card in in_suit.cards() {
                 if card.rank() < high.rank() {
@@ -99,8 +145,21 @@ impl RuleBot {
     }
 
     /// When void in the led suit (sloughing).
-    fn choose_slough(&self, _state: &GameState, legal_moves: CardSet) -> Card {
+    fn choose_slough(&self, state: &GameState, legal_moves: CardSet) -> Card {
         let qs = Self::queen_of_spades();
+
+        // Moon defense: if an opponent threatens to shoot, avoid giving them points.
+        // Don't dump hearts onto their trick — dump non-point cards instead.
+        if self.moon_threat(state).is_some() {
+            let non_point = CardSet::from_cards(legal_moves.cards().filter(|c| c.point_value() == 0));
+            if !non_point.is_empty() {
+                // Dump highest non-point card
+                return non_point
+                    .cards()
+                    .max_by_key(|c| c.rank() as u8)
+                    .unwrap();
+            }
+        }
 
         // Dump Qs first
         if legal_moves.contains(qs) {
@@ -116,11 +175,12 @@ impl RuleBot {
                 .unwrap();
         }
 
-        // Dump highest card in longest suit
+        // Dump highest card in longest suit (measured against actual hand, not legal moves)
+        let hand = state.hands[state.current_player.index()];
         let mut best: Option<Card> = None;
         let mut best_key: (usize, u8) = (0, 0); // (suit_len desc, rank desc)
         for card in legal_moves.cards() {
-            let suit_len = legal_moves.cards_of_suit(card.suit()).count() as usize;
+            let suit_len = hand.cards_of_suit(card.suit()).count() as usize;
             let key = (suit_len, card.rank() as u8);
             if key > best_key {
                 best_key = key;
@@ -170,11 +230,8 @@ mod tests {
             Card::new(Suit::Hearts, Rank::Two),
             Card::new(Suit::Diamonds, Rank::Ace),
         ]);
-        // Simulating being void in the led suit
         let state = GameState::new([CardSet::empty(); 4], DeckConfig::Tiny, PlayerIndex::P0);
-        // Trick in progress (not leading), void scenario — choose_slough should be called
         let bot = RuleBot::new();
-        // Direct call to slough
         let card = bot.choose_slough(&state, legal);
         assert_eq!(card, Card::new(Suit::Spades, Rank::Queen));
     }
@@ -191,10 +248,28 @@ mod tests {
         state.is_first_trick = false;
         state.hearts_broken = false;
 
-        let legal = state.legal_moves(); // should exclude hearts
+        let legal = state.legal_moves();
         let mut bot = RuleBot::new();
         let card = bot.choose_card(&state, legal);
         assert_eq!(card.suit(), Suit::Clubs);
+    }
+
+    #[test]
+    fn leads_lowest_heart_when_only_hearts() {
+        let hand = CardSet::from_cards([
+            Card::new(Suit::Hearts, Rank::Ace),
+            Card::new(Suit::Hearts, Rank::King),
+            Card::new(Suit::Hearts, Rank::Jack),
+        ]);
+        let hands = [hand, CardSet::empty(), CardSet::empty(), CardSet::empty()];
+        let mut state = GameState::new(hands, DeckConfig::Tiny, PlayerIndex::P0);
+        state.is_first_trick = false;
+        state.hearts_broken = true;
+
+        let legal = state.legal_moves();
+        let mut bot = RuleBot::new();
+        let card = bot.choose_card(&state, legal);
+        assert_eq!(card, Card::new(Suit::Hearts, Rank::Jack));
     }
 
     #[test]
@@ -225,7 +300,6 @@ mod tests {
 
         for seed in 0..games {
             let mut rng = StdRng::seed_from_u64(seed);
-            // P0,P1 = RuleBot; P2,P3 = RandomBot
             let players: [Box<dyn Player>; 4] = [
                 Box::new(RuleBot::new()),
                 Box::new(RuleBot::new()),
