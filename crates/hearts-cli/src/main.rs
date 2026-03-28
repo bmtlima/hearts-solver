@@ -6,6 +6,7 @@ use hearts_core::bots::random_bot::RandomBot;
 use hearts_core::bots::rule_bot::RuleBot;
 use hearts_core::deck::DeckConfig;
 use hearts_core::game::Player;
+use hearts_core::replay;
 use hearts_core::stats;
 
 #[derive(Parser)]
@@ -26,6 +27,10 @@ struct Args {
     /// Base random seed
     #[arg(long, default_value = "42")]
     seed: u64,
+
+    /// Generate an HTML replay of a single game to this file path
+    #[arg(long)]
+    replay: Option<String>,
 }
 
 fn parse_deck(s: &str) -> DeckConfig {
@@ -60,6 +65,29 @@ fn main() {
     if player_types.len() != 4 {
         eprintln!("Need exactly 4 player types, got {}", player_types.len());
         std::process::exit(1);
+    }
+
+    if let Some(ref path) = args.replay {
+        // Single-game HTML replay mode
+        let mut rng = StdRng::seed_from_u64(args.seed);
+        let hands = deck_config.deal(&mut rng);
+        let mut players: [Box<dyn Player>; 4] = [
+            make_player(&player_types[0], args.seed * 4),
+            make_player(&player_types[1], args.seed * 4 + 1),
+            make_player(&player_types[2], args.seed * 4 + 2),
+            make_player(&player_types[3], args.seed * 4 + 3),
+        ];
+        let labels = [
+            player_types[0].clone(),
+            player_types[1].clone(),
+            player_types[2].clone(),
+            player_types[3].clone(),
+        ];
+        let game_replay = replay::collect_replay(deck_config, hands, &mut players, labels, args.seed);
+        let html = replay::render_html(&game_replay);
+        std::fs::write(path, html).expect("failed to write replay file");
+        println!("Replay written to {}", path);
+        return;
     }
 
     let labels: [&str; 4] = [
