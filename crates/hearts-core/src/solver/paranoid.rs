@@ -439,4 +439,137 @@ mod tests {
 
         println!("Medium paranoid: score={}, time={:?}", score, elapsed);
     }
+
+    #[test]
+    fn medium_solve_by_trick() {
+        // Profile solve time at each trick start on Medium deck
+        let mut rng = StdRng::seed_from_u64(42);
+        let hands = DeckConfig::Medium.deal(&mut rng);
+        let mut state = GameState::new_with_deal(hands, DeckConfig::Medium);
+
+        let mut trick = 0;
+        let mut card_in_trick = 0;
+
+        while !state.is_game_over() {
+            let legal = state.legal_moves();
+            let cards_remaining: u32 = state.hands.iter().map(|h| h.count()).sum();
+
+            if card_in_trick == 0 {
+                let ai = state.current_player;
+                let start = std::time::Instant::now();
+                let mut s = state.clone();
+                let score = paranoid_solve(&mut s, ai);
+                let elapsed = start.elapsed();
+                println!(
+                    "trick={} cards_left={} legal={} score={} time={:?}",
+                    trick, cards_remaining, legal.count(), score, elapsed
+                );
+            }
+
+            let card = legal.cards().next().unwrap();
+            state.play_card(card);
+            card_in_trick += 1;
+            if card_in_trick == 4 {
+                card_in_trick = 0;
+                trick += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn medium_pimc_by_trick() {
+        // Measure actual PIMC decision time at each trick on Medium
+        use crate::search::pimc;
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let hands = DeckConfig::Medium.deal(&mut rng);
+        let mut state = GameState::new_with_deal(hands, DeckConfig::Medium);
+
+        let mut trick = 0;
+        let mut card_in_trick = 0;
+
+        while !state.is_game_over() {
+            let legal = state.legal_moves();
+            let cards_remaining: u32 = state.hands.iter().map(|h| h.count()).sum();
+
+            if card_in_trick == 0 && legal.count() > 1 {
+                let player = state.current_player;
+                let n_worlds = 30;
+
+                let start = std::time::Instant::now();
+                let mut pimc_rng = StdRng::seed_from_u64(trick as u64 * 1000);
+                let card = pimc::pimc_choose(
+                    &state, player, n_worlds,
+                    pimc::SolverType::Paranoid, &mut pimc_rng,
+                );
+                let elapsed = start.elapsed();
+
+                println!(
+                    "trick={} cards_left={} legal={} chose={} pimc_n={} time={:?}",
+                    trick, cards_remaining, legal.count(), card, n_worlds, elapsed
+                );
+
+                state.play_card(card);
+            } else {
+                let card = legal.cards().next().unwrap();
+                state.play_card(card);
+            }
+
+            card_in_trick += 1;
+            if card_in_trick == 4 {
+                card_in_trick = 0;
+                trick += 1;
+            }
+        }
+
+        println!("Final scores: {:?}", state.final_scores());
+    }
+
+    #[test]
+    fn full_solve_by_trick() {
+        // Profile paranoid solve time at each trick on Full deck
+        // to find the viable DD cutoff point
+        let mut rng = StdRng::seed_from_u64(42);
+        let hands = DeckConfig::Full.deal(&mut rng);
+        let mut state = GameState::new_with_deal(hands, DeckConfig::Full);
+
+        let mut trick = 0;
+        let mut card_in_trick = 0;
+
+        println!("trick | cards_left | legal | solve_time");
+        println!("------|------------|-------|----------");
+
+        while !state.is_game_over() {
+            let legal = state.legal_moves();
+            let cards_remaining: u32 = state.hands.iter().map(|h| h.count()).sum();
+
+            if card_in_trick == 0 {
+                // Only attempt solve if cards_remaining <= 28 (otherwise too slow)
+                if cards_remaining <= 32 {
+                    let ai = state.current_player;
+                    let start = std::time::Instant::now();
+                    let mut s = state.clone();
+                    let score = paranoid_solve(&mut s, ai);
+                    let elapsed = start.elapsed();
+                    println!(
+                        "  {:>2}  |     {:>2}     |   {:>2}  | {:?}",
+                        trick, cards_remaining, legal.count(), elapsed
+                    );
+                } else {
+                    println!(
+                        "  {:>2}  |     {:>2}     |   {:>2}  | SKIPPED (too slow)",
+                        trick, cards_remaining, legal.count()
+                    );
+                }
+            }
+
+            let card = legal.cards().next().unwrap();
+            state.play_card(card);
+            card_in_trick += 1;
+            if card_in_trick == 4 {
+                card_in_trick = 0;
+                trick += 1;
+            }
+        }
+    }
 }
