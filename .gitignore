@@ -24,3 +24,6 @@ replays/
 .claude/hooks/log-attribution.sh
 
 .claude
+
+# Docs
+docs/notes.md
