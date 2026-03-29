@@ -1,546 +1,656 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hearts Replay</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 16px;
-  }
-  h1 { font-size: 18px; font-weight: 600; margin-bottom: 8px; color: #9ca3af; }
-  .table {
-    display: grid;
-    grid-template-areas:
-      ".    top    ."
-      "left center right"
-      ".    bottom .";
-    grid-template-columns: 1fr minmax(220px, 280px) 1fr;
-    grid-template-rows: auto minmax(140px, 180px) auto;
-    gap: 12px;
-    width: 100%;
-    max-width: 900px;
-    margin: 8px 0;
-  }
-  .player-area {
-    background: #16213e;
-    border-radius: 10px;
-    padding: 10px 12px;
-    border: 2px solid transparent;
-    transition: border-color 0.2s;
-  }
-  .player-area.active { border-color: #f59e0b; }
-  .player-area.winner-highlight { border-color: #10b981; }
-  .player-top { grid-area: top; }
-  .player-left { grid-area: left; }
-  .player-right { grid-area: right; }
-  .player-bottom { grid-area: bottom; }
-  .player-label {
-    font-size: 12px;
-    font-weight: 600;
-    margin-bottom: 6px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .player-name { color: #9ca3af; }
-  .player-points {
-    background: #0f3460;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    color: #60a5fa;
-  }
-  .hand {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    min-height: 38px;
-  }
-  .card {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 50px;
-    border-radius: 5px;
-    font-size: 13px;
-    font-weight: 700;
-    cursor: default;
-    transition: all 0.15s;
-    flex-shrink: 0;
-    line-height: 1;
-    background: #f8f8f8;
-    color: #1a1a1a;
-    border: 1px solid #d0d0d0;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
-  }
-  .card.red { color: #dc2626; }
-  .card.black { color: #1a1a1a; }
-  .card.played {
-    opacity: 0.2;
-    transform: scale(0.9);
-  }
-  .card.legal {
-    box-shadow: 0 0 0 2px #f59e0b;
-  }
-  .card.just-played {
-    box-shadow: 0 0 0 2px #10b981;
-    transform: scale(1.05);
-  }
-  .trick-area {
-    grid-area: center;
-    background: #0d4d2e;
-    border-radius: 14px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 12px;
-    border: 2px solid #1a6b3f;
-  }
-  .trick-label {
-    font-size: 11px;
-    color: #6ee7b7;
-    font-weight: 600;
-  }
-  .trick-cards {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .trick-card-slot {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 3px;
-  }
-  .trick-card-slot .who {
-    font-size: 10px;
-    color: #9ca3af;
-  }
-  .trick-card-slot .card {
-    width: 40px;
-    height: 56px;
-    font-size: 14px;
-  }
-  .trick-card-slot .card.empty-slot {
-    background: rgba(255,255,255,0.08);
-    border: 1px dashed rgba(255,255,255,0.2);
-    color: transparent;
-    box-shadow: none;
-  }
-  .trick-result {
-    font-size: 11px;
-    color: #fbbf24;
-    font-weight: 600;
-    min-height: 16px;
-  }
-  .info-bar {
-    display: flex;
-    gap: 16px;
-    align-items: center;
-    justify-content: center;
-    flex-wrap: wrap;
-    margin: 4px 0;
-    font-size: 13px;
-  }
-  .info-item {
-    background: #16213e;
-    padding: 4px 12px;
-    border-radius: 6px;
-  }
-  .hearts-broken { color: #ef4444; }
-  .hearts-unbroken { color: #6b7280; }
-  .controls {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    margin: 8px 0;
-  }
-  .controls button {
-    background: #16213e;
-    color: #e0e0e0;
-    border: 1px solid #334155;
-    border-radius: 6px;
-    padding: 6px 14px;
-    font-size: 14px;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-  .controls button:hover { background: #1e3a5f; }
-  .controls button:active { background: #0f3460; }
-  .step-display {
-    font-size: 13px;
-    color: #9ca3af;
-    min-width: 140px;
-    text-align: center;
-  }
-  .final-scores {
-    background: #16213e;
-    border-radius: 10px;
-    padding: 12px 20px;
-    margin-top: 4px;
-    display: none;
-    text-align: center;
-  }
-  .final-scores.visible { display: block; }
-  .final-scores h3 { font-size: 14px; margin-bottom: 6px; color: #fbbf24; }
-  .final-scores .score-row {
-    display: flex;
-    justify-content: center;
-    gap: 20px;
-    font-size: 13px;
-  }
-  .moon-badge {
-    display: inline-block;
-    background: #7c3aed;
-    color: white;
-    font-size: 10px;
-    padding: 1px 6px;
-    border-radius: 3px;
-    margin-left: 4px;
-  }
-  .kbd {
-    display: inline-block;
-    background: #334155;
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 10px;
-    color: #9ca3af;
-    margin: 0 1px;
-  }
-  .help {
-    font-size: 11px;
-    color: #6b7280;
-    margin-top: 4px;
-  }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hearts Replay</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #9ca3af;
+    }
+
+    .table {
+      display: grid;
+      grid-template-areas:
+        ".    top    ."
+        "left center right"
+        ".    bottom .";
+      grid-template-columns: 1fr minmax(220px, 280px) 1fr;
+      grid-template-rows: auto minmax(140px, 180px) auto;
+      gap: 12px;
+      width: 100%;
+      max-width: 900px;
+      margin: 8px 0;
+    }
+
+    .player-area {
+      background: #16213e;
+      border-radius: 10px;
+      padding: 10px 12px;
+      border: 2px solid transparent;
+      transition: border-color 0.2s;
+    }
+
+    .player-area.active {
+      border-color: #f59e0b;
+    }
+
+    .player-area.winner-highlight {
+      border-color: #10b981;
+    }
+
+    .player-top {
+      grid-area: top;
+    }
+
+    .player-left {
+      grid-area: left;
+    }
+
+    .player-right {
+      grid-area: right;
+    }
+
+    .player-bottom {
+      grid-area: bottom;
+    }
+
+    .player-label {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .player-name {
+      color: #9ca3af;
+    }
+
+    .player-points {
+      background: #0f3460;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #60a5fa;
+    }
+
+    .hand {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      min-height: 38px;
+    }
+
+    .card {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 50px;
+      border-radius: 5px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: default;
+      transition: all 0.15s;
+      flex-shrink: 0;
+      line-height: 1;
+      background: #f8f8f8;
+      color: #1a1a1a;
+      border: 1px solid #d0d0d0;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+    }
+
+    .card.red {
+      color: #dc2626;
+    }
+
+    .card.black {
+      color: #1a1a1a;
+    }
+
+    .card.played {
+      opacity: 0.2;
+      transform: scale(0.9);
+    }
+
+    .card.legal {
+      box-shadow: 0 0 0 2px #f59e0b;
+    }
+
+    .card.just-played {
+      box-shadow: 0 0 0 2px #10b981;
+      transform: scale(1.05);
+    }
+
+    .trick-area {
+      grid-area: center;
+      background: #0d4d2e;
+      border-radius: 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 12px;
+      border: 2px solid #1a6b3f;
+    }
+
+    .trick-label {
+      font-size: 11px;
+      color: #6ee7b7;
+      font-weight: 600;
+    }
+
+    .trick-cards {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .trick-card-slot {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .trick-card-slot .who {
+      font-size: 10px;
+      color: #9ca3af;
+    }
+
+    .trick-card-slot .card {
+      width: 40px;
+      height: 56px;
+      font-size: 14px;
+    }
+
+    .trick-card-slot .card.empty-slot {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px dashed rgba(255, 255, 255, 0.2);
+      color: transparent;
+      box-shadow: none;
+    }
+
+    .trick-result {
+      font-size: 11px;
+      color: #fbbf24;
+      font-weight: 600;
+      min-height: 16px;
+    }
+
+    .info-bar {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin: 4px 0;
+      font-size: 13px;
+    }
+
+    .info-item {
+      background: #16213e;
+      padding: 4px 12px;
+      border-radius: 6px;
+    }
+
+    .hearts-broken {
+      color: #ef4444;
+    }
+
+    .hearts-unbroken {
+      color: #6b7280;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin: 8px 0;
+    }
+
+    .controls button {
+      background: #16213e;
+      color: #e0e0e0;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .controls button:hover {
+      background: #1e3a5f;
+    }
+
+    .controls button:active {
+      background: #0f3460;
+    }
+
+    .step-display {
+      font-size: 13px;
+      color: #9ca3af;
+      min-width: 140px;
+      text-align: center;
+    }
+
+    .final-scores {
+      background: #16213e;
+      border-radius: 10px;
+      padding: 12px 20px;
+      margin-top: 4px;
+      display: none;
+      text-align: center;
+    }
+
+    .final-scores.visible {
+      display: block;
+    }
+
+    .final-scores h3 {
+      font-size: 14px;
+      margin-bottom: 6px;
+      color: #fbbf24;
+    }
+
+    .final-scores .score-row {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      font-size: 13px;
+    }
+
+    .moon-badge {
+      display: inline-block;
+      background: #7c3aed;
+      color: white;
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      margin-left: 4px;
+    }
+
+    .kbd {
+      display: inline-block;
+      background: #334155;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 10px;
+      color: #9ca3af;
+      margin: 0 1px;
+    }
+
+    .help {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+  </style>
 </head>
+
 <body>
 
-<h1 id="header"></h1>
+  <h1 id="header"></h1>
 
-<div class="table">
-  <div class="player-area player-top" id="player-2">
-    <div class="player-label">
-      <span class="player-name" id="label-2"></span>
-      <span class="player-points" id="points-2">0 pts</span>
+  <div class="table">
+    <div class="player-area player-top" id="player-2">
+      <div class="player-label">
+        <span class="player-name" id="label-2"></span>
+        <span class="player-points" id="points-2">0 pts</span>
+      </div>
+      <div class="hand" id="hand-2"></div>
     </div>
-    <div class="hand" id="hand-2"></div>
-  </div>
-  <div class="player-area player-left" id="player-3">
-    <div class="player-label">
-      <span class="player-name" id="label-3"></span>
-      <span class="player-points" id="points-3">0 pts</span>
+    <div class="player-area player-left" id="player-3">
+      <div class="player-label">
+        <span class="player-name" id="label-3"></span>
+        <span class="player-points" id="points-3">0 pts</span>
+      </div>
+      <div class="hand" id="hand-3"></div>
     </div>
-    <div class="hand" id="hand-3"></div>
-  </div>
-  <div class="trick-area">
-    <div class="trick-label" id="trick-label">Trick 1</div>
-    <div class="trick-cards" id="trick-cards"></div>
-    <div class="trick-result" id="trick-result"></div>
-  </div>
-  <div class="player-area player-right" id="player-1">
-    <div class="player-label">
-      <span class="player-name" id="label-1"></span>
-      <span class="player-points" id="points-1">0 pts</span>
+    <div class="trick-area">
+      <div class="trick-label" id="trick-label">Trick 1</div>
+      <div class="trick-cards" id="trick-cards"></div>
+      <div class="trick-result" id="trick-result"></div>
     </div>
-    <div class="hand" id="hand-1"></div>
-  </div>
-  <div class="player-area player-bottom" id="player-0">
-    <div class="player-label">
-      <span class="player-name" id="label-0"></span>
-      <span class="player-points" id="points-0">0 pts</span>
+    <div class="player-area player-right" id="player-1">
+      <div class="player-label">
+        <span class="player-name" id="label-1"></span>
+        <span class="player-points" id="points-1">0 pts</span>
+      </div>
+      <div class="hand" id="hand-1"></div>
     </div>
-    <div class="hand" id="hand-0"></div>
+    <div class="player-area player-bottom" id="player-0">
+      <div class="player-label">
+        <span class="player-name" id="label-0"></span>
+        <span class="player-points" id="points-0">0 pts</span>
+      </div>
+      <div class="hand" id="hand-0"></div>
+    </div>
   </div>
-</div>
 
-<div class="info-bar">
-  <span class="info-item" id="hearts-status"></span>
-</div>
+  <div class="info-bar">
+    <span class="info-item" id="hearts-status"></span>
+  </div>
 
-<div class="controls">
-  <button onclick="goToStart()" title="Go to start">&laquo;</button>
-  <button onclick="prevTrick()" title="Previous trick (Shift+Left)">&lsaquo;&lsaquo;</button>
-  <button onclick="prevStep()" title="Previous card (Left)">&lsaquo;</button>
-  <span class="step-display" id="step-display">Card 0 / 0</span>
-  <button onclick="nextStep()" title="Next card (Right)">&rsaquo;</button>
-  <button onclick="nextTrick()" title="Next trick (Shift+Right)">&rsaquo;&rsaquo;</button>
-  <button onclick="goToEnd()" title="Go to end">&raquo;</button>
-</div>
+  <div class="controls">
+    <button onclick="goToStart()" title="Go to start">&laquo;</button>
+    <button onclick="prevTrick()" title="Previous trick (Shift+Left)">&lsaquo;&lsaquo;</button>
+    <button onclick="prevStep()" title="Previous card (Left)">&lsaquo;</button>
+    <span class="step-display" id="step-display">Step 0 / 0</span>
+    <button onclick="nextStep()" title="Next card (Right)">&rsaquo;</button>
+    <button onclick="nextTrick()" title="Next trick (Shift+Right)">&rsaquo;&rsaquo;</button>
+    <button onclick="goToEnd()" title="Go to end">&raquo;</button>
+  </div>
 
-<div class="help">
-  <span class="kbd">&larr;</span><span class="kbd">&rarr;</span> card by card &nbsp;
-  <span class="kbd">Shift+&larr;</span><span class="kbd">Shift+&rarr;</span> trick by trick &nbsp;
-  <span class="kbd">Home</span><span class="kbd">End</span> start/end
-</div>
+  <div class="help">
+    <span class="kbd">&larr;</span><span class="kbd">&rarr;</span> card by card &nbsp;
+    <span class="kbd">Shift+&larr;</span><span class="kbd">Shift+&rarr;</span> trick by trick &nbsp;
+    <span class="kbd">Home</span><span class="kbd">End</span> start/end
+  </div>
 
-<div class="final-scores" id="final-scores">
-  <h3 id="final-title">Final Scores</h3>
-  <div class="score-row" id="final-row"></div>
-</div>
+  <div class="final-scores" id="final-scores">
+    <h3 id="final-title">Final Scores</h3>
+    <div class="score-row" id="final-row"></div>
+  </div>
 
-<script>
-const G = "__GAME_DATA__";
+  <script>
+    const G = "__GAME_DATA__";
 
-const SUIT_SYMBOL = { c: '\u2663', d: '\u2666', s: '\u2660', h: '\u2665' };
-const SUIT_COLOR = { c: 'black', d: 'red', s: 'black', h: 'red' };
+    const SUIT_SYMBOL = { c: '\u2663', d: '\u2666', s: '\u2660', h: '\u2665' };
+    const SUIT_COLOR = { c: 'black', d: 'red', s: 'black', h: 'red' };
 
-const totalCards = G.tricks.reduce((s, t) => s + t.plays.length, 0);
-let currentStep = 0;
+    // Each trick occupies (1 + plays.length) steps: 1 empty-board step, then one step per card.
+    const trickStarts = [];
+    let _ts = 0;
+    for (const t of G.tricks) {
+      trickStarts.push(_ts);
+      _ts += 1 + t.plays.length;
+    }
+    const totalSteps = _ts;
+    let currentStep = 0;
 
-function parseCard(str) {
-  const suit = str[str.length - 1];
-  const rank = str.slice(0, -1);
-  return { rank, suit, str };
-}
-
-function cardHtml(cardStr, classes) {
-  const c = parseCard(cardStr);
-  const cls = [SUIT_COLOR[c.suit], ...(classes || [])].join(' ');
-  return '<div class="card ' + cls + '">' + c.rank + SUIT_SYMBOL[c.suit] + '</div>';
-}
-
-function stateAtStep(step) {
-  const played = new Set();
-  const points = [0, 0, 0, 0];
-  let heartsBroken = false;
-  let trickIdx = 0;
-  let currentTrickPlays = [];
-  let currentTrickLeader = G.tricks.length > 0 ? G.tricks[0].leader : 0;
-  let lastCompletedTrick = null;
-  let currentPlayer = G.tricks.length > 0 ? G.tricks[0].leader : 0;
-  let justPlayedCard = null;
-  let currentLegalMoves = [];
-  let cardsProcessed = 0;
-
-  for (let ti = 0; ti < G.tricks.length && cardsProcessed < step; ti++) {
-    const trick = G.tricks[ti];
-    currentTrickLeader = trick.leader;
-    currentTrickPlays = [];
-
-    for (let pi = 0; pi < trick.plays.length && cardsProcessed < step; pi++) {
-      const play = trick.plays[pi];
-      played.add(play.card);
-      currentTrickPlays.push(play);
-      if (play.card[play.card.length - 1] === 'h') heartsBroken = true;
-      justPlayedCard = play.card;
-      cardsProcessed++;
+    function parseCard(str) {
+      const suit = str[str.length - 1];
+      const rank = str.slice(0, -1);
+      return { rank, suit, str };
     }
 
-    if (currentTrickPlays.length === trick.plays.length) {
-      points[trick.winner] += trick.points;
-      lastCompletedTrick = { winner: trick.winner, points: trick.points, plays: trick.plays, trickIndex: ti };
-      currentTrickPlays = [];
-      currentTrickLeader = ti + 1 < G.tricks.length ? G.tricks[ti + 1].leader : trick.winner;
-      trickIdx = ti + 1;
-    } else {
-      trickIdx = ti;
+    function cardHtml(cardStr, classes) {
+      const c = parseCard(cardStr);
+      const cls = [SUIT_COLOR[c.suit], ...(classes || [])].join(' ');
+      return '<div class="card ' + cls + '">' + c.rank + SUIT_SYMBOL[c.suit] + '</div>';
     }
-  }
 
-  // Find current player and their legal moves for the next card to play
-  if (step < totalCards) {
-    let count = 0;
-    for (let ti = 0; ti < G.tricks.length; ti++) {
-      for (let pi = 0; pi < G.tricks[ti].plays.length; pi++) {
-        if (count === step) {
-          currentPlayer = G.tricks[ti].plays[pi].player;
-          currentLegalMoves = G.tricks[ti].plays[pi].legal_moves;
+    function stateAtStep(step) {
+      const played = new Set();
+      const points = [0, 0, 0, 0];
+      let heartsBroken = false;
+      let lastCompletedTrick = null;
+      let justPlayedCard = null;
+
+      // Walk through tricks to find where this step lands.
+      let activeTrickIdx = -1;
+      let cardsInActiveTrick = 0;
+      let remaining = step;
+
+      for (let ti = 0; ti < G.tricks.length; ti++) {
+        const trickSize = 1 + G.tricks[ti].plays.length;
+        if (remaining < trickSize) {
+          activeTrickIdx = ti;
+          cardsInActiveTrick = remaining; // 0 = empty board for this trick
+          break;
         }
-        count++;
-        if (currentLegalMoves.length > 0) break;
+        remaining -= trickSize;
+        // Fully completed trick — accumulate state
+        for (const play of G.tricks[ti].plays) {
+          played.add(play.card);
+          if (play.card[play.card.length - 1] === 'h') heartsBroken = true;
+        }
+        points[G.tricks[ti].winner] += G.tricks[ti].points;
+        lastCompletedTrick = {
+          winner: G.tricks[ti].winner, points: G.tricks[ti].points,
+          plays: G.tricks[ti].plays, trickIndex: ti
+        };
       }
-      if (currentLegalMoves.length > 0) break;
+
+      const isGameOver = activeTrickIdx === -1;
+      let currentTrickPlays = [];
+      let currentPlayer = 0;
+      let currentLegalMoves = [];
+      let hasActivePlayer = false;
+      let showEmptyTrick = false;
+      let displayTrick = isGameOver ? G.tricks.length : activeTrickIdx + 1;
+
+      if (!isGameOver) {
+        const trick = G.tricks[activeTrickIdx];
+
+        if (cardsInActiveTrick === 0) {
+          // Empty board state at the start of this trick
+          showEmptyTrick = true;
+          hasActivePlayer = true;
+          currentPlayer = trick.leader;
+          if (trick.plays.length > 0) {
+            currentLegalMoves = trick.plays[0].legal_moves;
+          }
+        } else {
+          // Process the cards played so far in this trick
+          for (let pi = 0; pi < cardsInActiveTrick; pi++) {
+            const play = trick.plays[pi];
+            played.add(play.card);
+            currentTrickPlays.push(play);
+            if (play.card[play.card.length - 1] === 'h') heartsBroken = true;
+            justPlayedCard = play.card;
+          }
+
+          if (cardsInActiveTrick === trick.plays.length) {
+            // Trick just completed
+            points[trick.winner] += trick.points;
+            lastCompletedTrick = {
+              winner: trick.winner, points: trick.points,
+              plays: trick.plays, trickIndex: activeTrickIdx
+            };
+            currentTrickPlays = [];
+            hasActivePlayer = false;
+          } else {
+            // Mid-trick — next card to play
+            hasActivePlayer = true;
+            const nextPlay = trick.plays[cardsInActiveTrick];
+            currentPlayer = nextPlay.player;
+            currentLegalMoves = nextPlay.legal_moves;
+          }
+        }
+      }
+
+      return {
+        played, points, heartsBroken,
+        trickIdx: activeTrickIdx >= 0 ? activeTrickIdx : G.tricks.length,
+        currentTrickPlays, lastCompletedTrick,
+        currentPlayer, justPlayedCard, currentLegalMoves,
+        displayTrick: Math.min(displayTrick, G.tricks.length),
+        isGameOver, showEmptyTrick, hasActivePlayer,
+      };
     }
-  }
 
-  let displayTrick = trickIdx + 1;
-  if (currentTrickPlays.length === 0 && lastCompletedTrick && step > 0 && step < totalCards) {
-    displayTrick = trickIdx + 1;
-  }
+    function render() {
+      const s = stateAtStep(currentStep);
 
-  return {
-    played, points, heartsBroken, trickIdx,
-    currentTrickPlays, currentTrickLeader, lastCompletedTrick,
-    currentPlayer, justPlayedCard, currentLegalMoves,
-    displayTrick: Math.min(displayTrick, G.tricks.length),
-    isGameOver: step === totalCards,
-  };
-}
+      document.getElementById('header').textContent =
+        'Hearts Replay \u2014 ' + G.deck_config + ' deck \u2014 seed ' + G.seed;
 
-function render() {
-  const s = stateAtStep(currentStep);
+      for (let p = 0; p < 4; p++) {
+        const handEl = document.getElementById('hand-' + p);
+        const labelEl = document.getElementById('label-' + p);
+        const pointsEl = document.getElementById('points-' + p);
+        const areaEl = document.getElementById('player-' + p);
 
-  document.getElementById('header').textContent =
-    'Hearts Replay \u2014 ' + G.deck_config + ' deck \u2014 seed ' + G.seed;
+        labelEl.textContent = 'P' + p + ': ' + G.player_labels[p];
+        pointsEl.textContent = s.points[p] + ' pts';
 
-  for (let p = 0; p < 4; p++) {
-    const handEl = document.getElementById('hand-' + p);
-    const labelEl = document.getElementById('label-' + p);
-    const pointsEl = document.getElementById('points-' + p);
-    const areaEl = document.getElementById('player-' + p);
+        let html = '';
+        for (const cardStr of G.initial_hands[p]) {
+          const classes = [];
+          if (s.played.has(cardStr)) {
+            classes.push('played');
+          } else {
+            if (s.hasActivePlayer && p === s.currentPlayer && s.currentLegalMoves.includes(cardStr)) {
+              classes.push('legal');
+            }
+            if (s.justPlayedCard === cardStr) {
+              classes.push('just-played');
+            }
+          }
+          html += cardHtml(cardStr, classes);
+        }
+        handEl.innerHTML = html;
 
-    labelEl.textContent = 'P' + p + ': ' + G.player_labels[p];
-    pointsEl.textContent = s.points[p] + ' pts';
+        areaEl.classList.toggle('active', s.hasActivePlayer && p === s.currentPlayer);
+        const wonTrick = !s.showEmptyTrick && s.currentTrickPlays.length === 0 &&
+          s.lastCompletedTrick && s.lastCompletedTrick.winner === p && currentStep > 0;
+        areaEl.classList.toggle('winner-highlight', wonTrick);
+      }
 
-    let html = '';
-    for (const cardStr of G.initial_hands[p]) {
-      const classes = [];
-      if (s.played.has(cardStr)) {
-        classes.push('played');
+      const trickCardsEl = document.getElementById('trick-cards');
+      const trickLabelEl = document.getElementById('trick-label');
+      const trickResultEl = document.getElementById('trick-result');
+
+      trickLabelEl.textContent = 'Trick ' + s.displayTrick + ' / ' + G.tricks.length;
+
+      let trickToShow = s.currentTrickPlays;
+      let showingCompleted = false;
+
+      if (s.showEmptyTrick) {
+        trickToShow = []; // Force empty board
+      } else if (trickToShow.length === 0 && s.lastCompletedTrick && currentStep > 0) {
+        trickToShow = s.lastCompletedTrick.plays;
+        showingCompleted = true;
+      }
+
+      let trickHtml = '';
+      for (let i = 0; i < 4; i++) {
+        if (i < trickToShow.length) {
+          const play = trickToShow[i];
+          trickHtml += '<div class="trick-card-slot">' +
+            '<span class="who">P' + play.player + '</span>' +
+            cardHtml(play.card, []) +
+            '</div>';
+        } else {
+          trickHtml += '<div class="trick-card-slot">' +
+            '<span class="who">&nbsp;</span>' +
+            '<div class="card empty-slot">&nbsp;</div>' +
+            '</div>';
+        }
+      }
+      trickCardsEl.innerHTML = trickHtml;
+
+      if (showingCompleted && s.lastCompletedTrick) {
+        const lt = s.lastCompletedTrick;
+        trickResultEl.textContent = 'P' + lt.winner + ' wins' + (lt.points > 0 ? ' (+' + lt.points + ' pts)' : '');
       } else {
-        if (currentStep < totalCards && p === s.currentPlayer && s.currentLegalMoves.includes(cardStr)) {
-          classes.push('legal');
-        }
-        if (s.justPlayedCard === cardStr) {
-          classes.push('just-played');
-        }
+        trickResultEl.textContent = '';
       }
-      html += cardHtml(cardStr, classes);
-    }
-    handEl.innerHTML = html;
 
-    areaEl.classList.toggle('active', !s.isGameOver && p === s.currentPlayer);
-    const wonTrick = s.currentTrickPlays.length === 0 && s.lastCompletedTrick &&
-      s.lastCompletedTrick.winner === p && currentStep > 0;
-    areaEl.classList.toggle('winner-highlight', wonTrick);
-  }
-
-  const trickCardsEl = document.getElementById('trick-cards');
-  const trickLabelEl = document.getElementById('trick-label');
-  const trickResultEl = document.getElementById('trick-result');
-
-  trickLabelEl.textContent = 'Trick ' + s.displayTrick + ' / ' + G.tricks.length;
-
-  let trickToShow = s.currentTrickPlays;
-  let showingCompleted = false;
-
-  if (trickToShow.length === 0 && s.lastCompletedTrick && currentStep > 0) {
-    trickToShow = s.lastCompletedTrick.plays;
-    showingCompleted = true;
-  }
-
-  let trickHtml = '';
-  for (let i = 0; i < 4; i++) {
-    if (i < trickToShow.length) {
-      const play = trickToShow[i];
-      trickHtml += '<div class="trick-card-slot">' +
-        '<span class="who">P' + play.player + '</span>' +
-        cardHtml(play.card, []) +
-        '</div>';
-    } else {
-      trickHtml += '<div class="trick-card-slot">' +
-        '<span class="who">&nbsp;</span>' +
-        '<div class="card empty-slot">&nbsp;</div>' +
-        '</div>';
-    }
-  }
-  trickCardsEl.innerHTML = trickHtml;
-
-  if (showingCompleted && s.lastCompletedTrick) {
-    const lt = s.lastCompletedTrick;
-    trickResultEl.textContent = 'P' + lt.winner + ' wins' + (lt.points > 0 ? ' (+' + lt.points + ' pts)' : '');
-  } else {
-    trickResultEl.textContent = '';
-  }
-
-  const hbEl = document.getElementById('hearts-status');
-  if (s.heartsBroken) {
-    hbEl.innerHTML = '\u2665 Hearts broken';
-    hbEl.className = 'info-item hearts-broken';
-  } else {
-    hbEl.innerHTML = '\u2661 Hearts not broken';
-    hbEl.className = 'info-item hearts-unbroken';
-  }
-
-  document.getElementById('step-display').textContent =
-    'Card ' + currentStep + ' / ' + totalCards;
-
-  const finalEl = document.getElementById('final-scores');
-  if (s.isGameOver) {
-    finalEl.classList.add('visible');
-    let title = 'Final Scores';
-    if (G.moon_shooter !== null) {
-      title += ' \u2014 P' + G.moon_shooter + ' shot the moon!';
-    }
-    document.getElementById('final-title').textContent = title;
-    let row = '';
-    for (let p = 0; p < 4; p++) {
-      const moon = G.moon_shooter === p ? '<span class="moon-badge">MOON</span>' : '';
-      row += '<span>P' + p + ' ' + G.player_labels[p] + ': <b>' + G.final_scores[p] + '</b>' + moon + '</span>';
-    }
-    document.getElementById('final-row').innerHTML = row;
-  } else {
-    finalEl.classList.remove('visible');
-  }
-}
-
-function nextStep() { if (currentStep < totalCards) { currentStep++; render(); } }
-function prevStep() { if (currentStep > 0) { currentStep--; render(); } }
-function goToStart() { currentStep = 0; render(); }
-function goToEnd() { currentStep = totalCards; render(); }
-
-function nextTrick() {
-  let count = 0;
-  for (let ti = 0; ti < G.tricks.length; ti++) {
-    const trickEnd = count + G.tricks[ti].plays.length;
-    if (trickEnd > currentStep) {
-      currentStep = trickEnd;
-      render();
-      return;
-    }
-    count = trickEnd;
-  }
-  currentStep = totalCards;
-  render();
-}
-
-function prevTrick() {
-  let count = 0;
-  for (let ti = 0; ti < G.tricks.length; ti++) {
-    const trickStart = count;
-    const trickEnd = count + G.tricks[ti].plays.length;
-    if (trickEnd >= currentStep && trickStart < currentStep) {
-      if (currentStep === trickStart) {
-        currentStep = ti > 0 ? trickStart - G.tricks[ti - 1].plays.length : 0;
+      const hbEl = document.getElementById('hearts-status');
+      if (s.heartsBroken) {
+        hbEl.innerHTML = '\u2665 Hearts broken';
+        hbEl.className = 'info-item hearts-broken';
       } else {
-        currentStep = trickStart;
+        hbEl.innerHTML = '\u2661 Hearts not broken';
+        hbEl.className = 'info-item hearts-unbroken';
       }
-      render();
-      return;
+
+      document.getElementById('step-display').textContent =
+        'Step ' + currentStep + ' / ' + totalSteps;
+
+      const finalEl = document.getElementById('final-scores');
+      if (s.isGameOver) {
+        finalEl.classList.add('visible');
+        let title = 'Final Scores';
+        if (G.moon_shooter !== null) {
+          title += ' \u2014 P' + G.moon_shooter + ' shot the moon!';
+        }
+        document.getElementById('final-title').textContent = title;
+        let row = '';
+        for (let p = 0; p < 4; p++) {
+          const moon = G.moon_shooter === p ? '<span class="moon-badge">MOON</span>' : '';
+          row += '<span>P' + p + ' ' + G.player_labels[p] + ': <b>' + G.final_scores[p] + '</b>' + moon + '</span>';
+        }
+        document.getElementById('final-row').innerHTML = row;
+      } else {
+        finalEl.classList.remove('visible');
+      }
     }
-    count = trickEnd;
-  }
-  if (G.tricks.length > 0) {
-    currentStep = totalCards - G.tricks[G.tricks.length - 1].plays.length;
-  } else {
-    currentStep = 0;
-  }
-  render();
-}
 
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'ArrowRight' && e.shiftKey) { nextTrick(); e.preventDefault(); }
-  else if (e.key === 'ArrowLeft' && e.shiftKey) { prevTrick(); e.preventDefault(); }
-  else if (e.key === 'ArrowRight') { nextStep(); e.preventDefault(); }
-  else if (e.key === 'ArrowLeft') { prevStep(); e.preventDefault(); }
-  else if (e.key === 'Home') { goToStart(); e.preventDefault(); }
-  else if (e.key === 'End') { goToEnd(); e.preventDefault(); }
-});
+    function nextStep() { if (currentStep < totalSteps) { currentStep++; render(); } }
+    function prevStep() { if (currentStep > 0) { currentStep--; render(); } }
+    function goToStart() { currentStep = 0; render(); }
+    function goToEnd() { currentStep = totalSteps; render(); }
 
-render();
-</script>
+    function nextTrick() {
+      for (let ti = 0; ti < G.tricks.length; ti++) {
+        const trickEnd = trickStarts[ti] + 1 + G.tricks[ti].plays.length;
+        if (trickEnd > currentStep) {
+          // Currently in trick ti — jump to start of next trick (or game end)
+          if (ti + 1 < G.tricks.length) {
+            currentStep = trickStarts[ti + 1];
+          } else {
+            currentStep = totalSteps;
+          }
+          render();
+          return;
+        }
+      }
+      currentStep = totalSteps;
+      render();
+    }
+
+    function prevTrick() {
+      for (let ti = G.tricks.length - 1; ti >= 0; ti--) {
+        if (trickStarts[ti] < currentStep) {
+          currentStep = trickStarts[ti];
+          render();
+          return;
+        }
+      }
+      currentStep = 0;
+      render();
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight' && e.shiftKey) { nextTrick(); e.preventDefault(); }
+      else if (e.key === 'ArrowLeft' && e.shiftKey) { prevTrick(); e.preventDefault(); }
+      else if (e.key === 'ArrowRight') { nextStep(); e.preventDefault(); }
+      else if (e.key === 'ArrowLeft') { prevStep(); e.preventDefault(); }
+      else if (e.key === 'Home') { goToStart(); e.preventDefault(); }
+      else if (e.key === 'End') { goToEnd(); e.preventDefault(); }
+    });
+
+    render();
+  </script>
 </body>
+
 </html>
