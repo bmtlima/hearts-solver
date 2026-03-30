@@ -16,7 +16,8 @@ use hearts_core::game::Player;
 use hearts_core::game_state::GameState;
 use hearts_core::solver::eval::{extract_features, FEATURE_COUNT, FEATURE_NAMES};
 use hearts_core::solver::paranoid::paranoid_solve;
-use hearts_core::types::{Card, Rank, Suit};
+use hearts_core::trick::PlayerIndex;
+use hearts_core::types::{Card, Rank, Suit, ALL_CARDS};
 
 #[derive(Parser)]
 #[command(about = "Generate training data for regression eval")]
@@ -32,9 +33,14 @@ struct Args {
     /// Output CSV path
     #[arg(long, default_value = "regression/data/training_data.csv")]
     output: String,
+
+    /// Include raw card position columns (208 card + 6 scalar = 214 extra columns)
+    #[arg(long)]
+    raw_cards: bool,
 }
 
-/// Simple duck heuristic: play to avoid taking tricks.
+// ── Position generation ─────────────────────────────────────────────────
+
 fn duck_choose(state: &GameState, legal: CardSet, _rng: &mut impl Rng) -> Card {
     if legal.count() == 1 {
         return legal.cards().next().unwrap();
@@ -43,7 +49,6 @@ fn duck_choose(state: &GameState, legal: CardSet, _rng: &mut impl Rng) -> Card {
     let qs = Card::new(Suit::Spades, Rank::Queen);
 
     if state.current_trick.is_empty() {
-        // Leading: play lowest non-heart, non-Qs card
         let safe: Vec<Card> = legal
             .cards()
             .filter(|c| c.suit() != Suit::Hearts && *c != qs)
@@ -82,7 +87,6 @@ fn duck_choose(state: &GameState, legal: CardSet, _rng: &mut impl Rng) -> Card {
         return in_suit.cards().min_by_key(|c| c.rank() as u8).unwrap();
     }
 
-    // Void in led suit: dump Qs > highest heart > highest card
     if legal.contains(qs) {
         return qs;
     }
@@ -96,7 +100,6 @@ fn duck_choose(state: &GameState, legal: CardSet, _rng: &mut impl Rng) -> Card {
         .unwrap()
 }
 
-/// Pick a card using mixed policy.
 fn mixed_choose(
     state: &GameState,
     legal: CardSet,
@@ -115,7 +118,6 @@ fn mixed_choose(
     }
 }
 
-/// Play forward exactly 6 tricks from a full deal.
 fn play_to_28_cards(hands: [CardSet; 4], rng: &mut StdRng) -> Option<GameState> {
     let mut state = GameState::new_with_deal(hands, DeckConfig::Full);
     let mut rule_bot = RuleBot::new();
@@ -137,13 +139,124 @@ fn play_to_28_cards(hands: [CardSet; 4], rng: &mut StdRng) -> Option<GameState> 
     Some(state)
 }
 
+// ── Raw card data extraction ────────────────────────────────────────────
+
+const RAW_CARD_COLS: usize = 208; // 52 cards × 4 holders
+const RAW_SCALAR_COLS: usize = 6;
+const RAW_TOTAL: usize = RAW_CARD_COLS + RAW_SCALAR_COLS; // 214
+
+fn rank_char(r: Rank) -> char {
+    match r {
+        Rank::Two => '2',
+        Rank::Three => '3',
+        Rank::Four => '4',
+        Rank::Five => '5',
+        Rank::Six => '6',
+        Rank::Seven => '7',
+        Rank::Eight => '8',
+        Rank::Nine => '9',
+        Rank::Ten => 'T',
+        Rank::Jack => 'J',
+        Rank::Queen => 'Q',
+        Rank::King => 'K',
+        Rank::Ace => 'A',
+    }
+}
+
+fn suit_char(s: Suit) -> char {
+    match s {
+        Suit::Clubs => 'c',
+        Suit::Diamonds => 'd',
+        Suit::Spades => 's',
+        Suit::Hearts => 'h',
+    }
+}
+
+/// Generate header names for the 214 raw columns.
+fn raw_card_header() -> Vec<String> {
+    let mut names = Vec::with_capacity(RAW_TOTAL);
+    for card in ALL_CARDS.iter() {
+        let rc = rank_char(card.rank());
+        let sc = suit_char(card.suit());
+        names.push(format!("card_{}{}_ai", rc, sc));
+        names.push(format!("card_{}{}_opp1", rc, sc));
+        names.push(format!("card_{}{}_opp2", rc, sc));
+        names.push(format!("card_{}{}_opp3", rc, sc));
+    }
+    names.push("ai_points_taken_raw".to_string());
+    names.push("opp1_points_taken".to_string());
+    names.push("opp2_points_taken".to_string());
+    names.push("opp3_points_taken".to_string());
+    names.push("ai_has_lead_raw".to_string());
+    names.push("hearts_broken".to_string());
+    names
+}
+
+/// Map opponent player indices relative to AI (player index order, skipping AI).
+fn opponent_indices(ai: PlayerIndex) -> [usize; 3] {
+    let mut opps = [0usize; 3];
+    let mut k = 0;
+    for p in PlayerIndex::all() {
+        if p != ai {
+            opps[k] = p.index();
+            k += 1;
+        }
+    }
+    opps
+}
+
+/// Extract 214 raw values: 208 card binary + 6 scalars.
+fn extract_raw_cards(state: &GameState, ai: PlayerIndex) -> Vec<u8> {
+    let mut raw = vec![0u8; RAW_TOTAL];
+    let opps = opponent_indices(ai);
+
+    // 208 card columns: for each card, 4 binary columns (ai, opp1, opp2, opp3)
+    for (card_idx, card) in ALL_CARDS.iter().enumerate() {
+        let base = card_idx * 4;
+        // Check if card is in any hand (not played)
+        if state.hands[ai.index()].contains(*card) {
+            raw[base] = 1; // ai_holds
+        } else if state.hands[opps[0]].contains(*card) {
+            raw[base + 1] = 1; // opp1_holds
+        } else if state.hands[opps[1]].contains(*card) {
+            raw[base + 2] = 1; // opp2_holds
+        } else if state.hands[opps[2]].contains(*card) {
+            raw[base + 3] = 1; // opp3_holds
+        }
+        // If card was already played, all 4 stay 0
+    }
+
+    // 6 scalar columns
+    let scalar_base = RAW_CARD_COLS;
+    raw[scalar_base] = state.points_taken[ai.index()] as u8;
+    raw[scalar_base + 1] = state.points_taken[opps[0]] as u8;
+    raw[scalar_base + 2] = state.points_taken[opps[1]] as u8;
+    raw[scalar_base + 3] = state.points_taken[opps[2]] as u8;
+    raw[scalar_base + 4] = (state.current_player == ai) as u8;
+    raw[scalar_base + 5] = state.hearts_broken as u8;
+
+    raw
+}
+
+// ── Sample types and formatting ─────────────────────────────────────────
+
 struct Sample {
+    raw_cards: Option<Vec<u8>>,
     features: [f64; FEATURE_COUNT],
     score: i32,
 }
 
 fn format_row(sample: &Sample) -> String {
     let mut row = String::new();
+
+    // Raw card columns first (if present)
+    if let Some(ref raw) = sample.raw_cards {
+        for &v in raw.iter() {
+            write!(row, "{},", v).unwrap();
+        }
+    }
+
+    // Existing features
     for (i, &f) in sample.features.iter().enumerate() {
         if i > 0 {
             row.push(',');
@@ -154,19 +267,22 @@ fn format_row(sample: &Sample) -> String {
             write!(row, "{:.6}", f).unwrap();
         }
     }
+
+    // Score
     write!(row, ",{}", sample.score).unwrap();
     row
 }
 
+// ── Main ────────────────────────────────────────────────────────────────
+
 fn main() {
     let args = Args::parse();
 
-    // Ensure output directory exists
     if let Some(parent) = std::path::Path::new(&args.output).parent() {
         fs::create_dir_all(parent).expect("failed to create output directory");
     }
 
-    // Pre-generate all positions sequentially (fast, needs RNG)
+    // Pre-generate positions
     eprintln!("Generating {} positions...", args.samples);
     let mut rng = StdRng::seed_from_u64(args.seed);
     let mut positions: Vec<(GameState, u64)> = Vec::with_capacity(args.samples);
@@ -175,7 +291,6 @@ fn main() {
         let hands = DeckConfig::Full.deal(&mut rng);
         let play_seed = rng.gen::<u64>();
         let mut play_rng = StdRng::seed_from_u64(play_seed);
-
         if let Some(state) = play_to_28_cards(hands, &mut play_rng) {
             let solve_seed = rng.gen::<u64>();
             positions.push((state, solve_seed));
@@ -183,10 +298,10 @@ fn main() {
     }
     eprintln!("Positions ready. Solving in parallel...");
 
-    // Solve all positions in parallel (expensive part)
     let start = Instant::now();
     let done = AtomicUsize::new(0);
     let total = positions.len();
+    let raw_cards_flag = args.raw_cards;
 
     let samples: Vec<Sample> = positions
         .par_iter()
@@ -195,12 +310,21 @@ fn main() {
             let mut solve_state = state.clone();
             let score = paranoid_solve(&mut solve_state, ai_player);
             let features = extract_features(state, ai_player);
+            let raw_cards = if raw_cards_flag {
+                Some(extract_raw_cards(state, ai_player))
+            } else {
+                None
+            };
 
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % 10 == 0 || n == total {
                 let elapsed = start.elapsed().as_secs_f64();
                 let rate = n as f64 / elapsed;
-                let eta = if rate > 0.0 { (total - n) as f64 / rate } else { 0.0 };
+                let eta = if rate > 0.0 {
+                    (total - n) as f64 / rate
+                } else {
+                    0.0
+                };
                 let pct = 100.0 * n as f64 / total as f64;
                 let bar_len = 30;
                 let filled = (bar_len as f64 * pct / 100.0) as usize;
@@ -211,32 +335,46 @@ fn main() {
                 );
             }
 
-            Sample { features, score }
+            Sample {
+                raw_cards,
+                features,
+                score,
+            }
         })
         .collect();
 
-    eprintln!(); // newline after progress bar
+    eprintln!();
 
     // Write CSV
     let file = File::create(&args.output).expect("failed to create output file");
     let mut writer = BufWriter::new(file);
 
-    let header: Vec<&str> = FEATURE_NAMES
-        .iter()
-        .copied()
-        .chain(std::iter::once("score"))
-        .collect();
-    writeln!(writer, "{}", header.join(",")).unwrap();
+    // Header
+    let mut header_parts: Vec<String> = Vec::new();
+    if args.raw_cards {
+        header_parts.extend(raw_card_header());
+    }
+    for name in FEATURE_NAMES.iter() {
+        header_parts.push(name.to_string());
+    }
+    header_parts.push("score".to_string());
+    writeln!(writer, "{}", header_parts.join(",")).unwrap();
 
     for sample in &samples {
         writeln!(writer, "{}", format_row(sample)).unwrap();
     }
     writer.flush().unwrap();
 
+    let n_cols = if args.raw_cards {
+        RAW_TOTAL + FEATURE_COUNT + 1
+    } else {
+        FEATURE_COUNT + 1
+    };
     let elapsed = start.elapsed();
     eprintln!(
-        "Done: {} samples in {:.1}s ({:.1} samples/sec)",
+        "Done: {} samples, {} columns in {:.1}s ({:.1} samples/sec)",
         samples.len(),
+        n_cols,
         elapsed.as_secs_f64(),
         samples.len() as f64 / elapsed.as_secs_f64()
     );

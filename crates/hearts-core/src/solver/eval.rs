@@ -43,82 +43,81 @@ pub const FEATURE_NAMES: [&str; FEATURE_COUNT] = [
     "ai_can_lead_spades_x_qs_exposed",
 ];
 
-/// Trained weights — first 29 from Ridge regression (alpha=10.0) on 1000 samples.
-/// New features 29-34 are placeholders (0.0) until retrained.
+/// Trained weights — Linear regression on 5K samples, moon-filtered (R²=0.59).
 /// Layout: [bias, weight_0, weight_1, ..., weight_34]
 pub const EVAL_WEIGHTS: [f64; FEATURE_COUNT + 1] = [
     // bias
-    11.20764576,
+    3.769723527,
     // ai_points_taken
-    0.3828982067,
+    0.7732272385,
     // opp_max_points
-    0.0389682987,
+    -0.461373021,
     // opp_total_points
-    -0.6346433063,
+    0.21282395,
     // hearts_remaining
-    0.1210047547,
+    0.3102060694,
     // ai_has_qs
-    -1.084591773,
+    -4.761513299,
     // ai_has_qs_exposed
-    -1.254299086,
+    1.250310821,
     // ai_has_qs_protected
-    0.8494268645,
+    -2.400879675,
     // ai_has_as
-    0.613124761,
+    0.3665100458,
     // ai_has_ks
-    -0.002765325076,
+    0.3661292768,
     // qs_already_played
-    -0.01005694961,
+    -3.670011431,
     // ai_spade_count
-    -0.2506423959,
+    -0.7332578206,
     // ai_heart_count
-    0.02479826141,
+    -0.3378681545,
     // ai_top_hearts
-    0.3492681061,
+    0.8510265464,
     // ai_void_hearts
-    -0.916423496,
+    -1.069901413,
     // hearts_in_play
-    0.1210047547,
+    0.3102060694,
     // ai_void_count
-    -0.584125682,
+    -0.3872880774,
     // ai_top_card_count
-    0.5482331229,
+    0.1570520582,
     // ai_top2_card_count
-    0.8878017958,
+    0.8316770731,
     // opp_void_count
-    0.4669857151,
+    0.2209407499,
     // ai_longest_suit
-    -0.4242201288,
+    -0.316643926,
     // ai_shortest_nonvoid_suit
-    -0.05115283403,
+    0.2420030226,
     // ai_has_lead
-    0.0,
+    3.769723527,
     // ai_has_qs_x_opp_voids
-    0.531469218,
+    1.005612673,
     // ai_has_as_x_qs_in_play
-    0.1943008282,
+    1.560197504,
     // ai_has_ks_x_qs_in_play
-    -0.3073955427,
+    0.4790611066,
     // ai_top_cards_x_hearts_remaining
-    -0.1513057531,
+    -0.07825839852,
     // ai_has_lead_x_top_card_count
-    0.5482331229,
+    0.1570520582,
     // ai_took_all_penalties
-    -0.6096681491,
+    -1.02730656,
     // opp_took_all_penalties
-    0.6491504831,
+    0.07350231865,
     // qs_holder_other_spades
-    0.0,
+    0.7077678917,
     // qs_holder_void_count
-    0.0,
+    0.07320604223,
     // ai_can_lead_spades
-    0.0,
+    0.5458686839,
     // ai_safe_card_count
-    0.0,
+    -0.887002618,
     // ai_low_hearts
-    0.0,
+    -0.9420422559,
     // ai_can_lead_spades_x_qs_exposed
-    0.0,
+    -3.569085906,
 ];
 
 /// Extract all 35 features from a game state for the given AI player.
