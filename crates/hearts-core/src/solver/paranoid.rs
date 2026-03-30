@@ -270,6 +270,119 @@ fn paranoid_recursive(
     }
 }
 
+// ── Depth-limited solver with regression eval ──────────────────────────
+
+/// Depth-limited paranoid solve using regression eval as leaf evaluator.
+/// Returns f64 for better alpha-beta granularity.
+/// When `cards_remaining <= eval_cutoff` at a trick boundary, calls `eval_position`
+/// instead of continuing to terminal.
+pub fn paranoid_solve_depth_limited(
+    state: &mut GameState,
+    ai_player: PlayerIndex,
+    eval_cutoff: u32,
+) -> f64 {
+    paranoid_recursive_f64(state, ai_player, f64::NEG_INFINITY, f64::INFINITY, eval_cutoff)
+}
+
+/// Find the best move using depth-limited search with regression eval.
+pub fn paranoid_best_move_depth_limited(
+    state: &mut GameState,
+    ai_player: PlayerIndex,
+    eval_cutoff: u32,
+) -> (Card, f64) {
+    let legal = state.legal_moves();
+    let mut best_card = None;
+    let mut best_score = f64::INFINITY;
+
+    for card in legal.cards() {
+        let undo = state.play_card_with_undo(card);
+        let score =
+            paranoid_recursive_f64(state, ai_player, f64::NEG_INFINITY, f64::INFINITY, eval_cutoff);
+        state.undo_card(&undo);
+
+        if score < best_score {
+            best_score = score;
+            best_card = Some(card);
+        }
+    }
+
+    (best_card.unwrap(), best_score)
+}
+
+fn paranoid_recursive_f64(
+    state: &mut GameState,
+    ai_player: PlayerIndex,
+    mut alpha: f64,
+    mut beta: f64,
+    eval_cutoff: u32,
+) -> f64 {
+    // Terminal check
+    if state.is_game_over() {
+        return state.final_scores()[ai_player.index()] as f64;
+    }
+
+    // Eval cutoff: only at trick boundaries (empty current trick)
+    if state.current_trick.is_empty() {
+        let cards_remaining: u32 = state.hands.iter().map(|h| h.count()).sum();
+        if cards_remaining <= eval_cutoff {
+            return super::eval::eval_position(state, ai_player);
+        }
+    }
+
+    let legal = state.legal_moves();
+    let is_ai_turn = state.current_player == ai_player;
+
+    // Move ordering
+    let mut moves = [Card::new(Suit::Clubs, Rank::Two); 13];
+    let mut n_moves = 0;
+    for card in legal.cards() {
+        moves[n_moves] = card;
+        n_moves += 1;
+    }
+    let moves = &mut moves[..n_moves];
+    order_moves(moves, state);
+
+    if is_ai_turn {
+        // AI minimizes its own score (MIN node)
+        let mut best = f64::INFINITY;
+        for card in moves.iter() {
+            let undo = state.play_card_with_undo(*card);
+            let score = paranoid_recursive_f64(state, ai_player, alpha, beta, eval_cutoff);
+            state.undo_card(&undo);
+
+            if score < best {
+                best = score;
+            }
+            if best < beta {
+                beta = best;
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+        best
+    } else {
+        // Opponent coalition maximizes AI's score (MAX node)
+        let mut best = f64::NEG_INFINITY;
+        for card in moves.iter() {
+            let undo = state.play_card_with_undo(*card);
+            let score = paranoid_recursive_f64(state, ai_player, alpha, beta, eval_cutoff);
+            state.undo_card(&undo);
+
+            if score > best {
+                best = score;
+            }
+            if best > alpha {
+                alpha = best;
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+        best
+    }
+}
+
 /// Heuristic move ordering for better alpha-beta pruning.
 fn order_moves(moves: &mut [Card], state: &GameState) {
     let is_leading = state.current_trick.is_empty();
@@ -523,6 +636,55 @@ mod tests {
         }
 
         println!("Final scores: {:?}", state.final_scores());
+    }
+
+    #[test]
+    fn depth_limited_matches_full_on_tiny_cutoff_0() {
+        // With cutoff=0, the eval never triggers (cards_remaining > 0 always),
+        // so it searches to terminal — should match exact solve.
+        for seed in 0..100 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let hands = DeckConfig::Tiny.deal(&mut rng);
+
+            let mut s1 = GameState::new_with_deal(hands.clone(), DeckConfig::Tiny);
+            let ai = s1.current_player;
+            let exact = paranoid_solve(&mut s1, ai);
+
+            let mut s2 = GameState::new_with_deal(hands, DeckConfig::Tiny);
+            let dl = paranoid_solve_depth_limited(&mut s2, ai, 0);
+
+            assert!(
+                (dl - exact as f64).abs() < 1e-6,
+                "seed {}: depth_limited={} != exact={}",
+                seed, dl, exact
+            );
+        }
+    }
+
+    #[test]
+    fn depth_limited_produces_finite_results() {
+        // On Small deck with cutoff=20, eval fires immediately
+        let mut rng = StdRng::seed_from_u64(42);
+        let hands = DeckConfig::Small.deal(&mut rng);
+        let mut state = GameState::new_with_deal(hands, DeckConfig::Small);
+        let ai = state.current_player;
+
+        let score = paranoid_solve_depth_limited(&mut state, ai, 20);
+        assert!(score.is_finite(), "score should be finite, got {}", score);
+    }
+
+    #[test]
+    fn depth_limited_best_move_returns_legal_card() {
+        // Use Medium deck (32 cards) with cutoff=28 — only 1 trick of search
+        let mut rng = StdRng::seed_from_u64(42);
+        let hands = DeckConfig::Medium.deal(&mut rng);
+        let mut state = GameState::new_with_deal(hands, DeckConfig::Medium);
+        let ai = state.current_player;
+        let legal = state.legal_moves();
+
+        let (card, score) = paranoid_best_move_depth_limited(&mut state, ai, 28);
+        assert!(legal.contains(card), "returned card {} not in legal moves", card);
+        assert!(score.is_finite());
     }
 
     #[test]

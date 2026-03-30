@@ -67,6 +67,11 @@ fn make_player(kind: &str, seed: u64, pimc_worlds: usize, lambda: f64) -> Box<dy
             SolverType::Paranoid,
             StdRng::seed_from_u64(seed),
         )),
+        "pimc-dl" => Box::new(PIMCBot::new(
+            pimc_worlds,
+            SolverType::ParanoidDepthLimited(28),
+            StdRng::seed_from_u64(seed),
+        )),
         "alphamu" => Box::new(AlphaMuBot::new(
             pimc_worlds,
             SolverType::Paranoid,

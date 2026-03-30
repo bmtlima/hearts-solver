@@ -8,9 +8,14 @@ State-of-the-art Hearts AI using Pluribus/Libratus-style architecture adapted fo
 crates/
   hearts-core/    # Library: game engine, solvers, bots, search
   hearts-cli/     # Binary: CLI runner for games and benchmarks
+regression/
+  train_eval.py   # Python: train linear model, output Rust weights
+  data/           # Generated CSVs (gitignored)
+  plots/          # Scatter plots, diagnostics
 docs/
   plan.md         # Design document (architecture, algorithms)
   step-by-step.md # Incremental implementation plan (MAIN PLAN - READ THIS)
+  regression_plan.md # Regression eval design spec
 ```
 
 ## Language & Build
@@ -35,12 +40,19 @@ All source lives under `crates/hearts-core/src/`:
 | Types & primitives | `types.rs`, `card_set.rs`, `trick.rs` | Card, Suit, Rank, CardSet bitboard, PlayerIndex, Trick |
 | Game engine | `deck.rs`, `game_state.rs`, `game.rs` | Deck configs, state + legal moves + scoring, Player trait + GameRunner |
 | Bots | `bots/` | RandomBot, RuleBot, PIMCBot, AlphaMuBot |
-| Solvers | `solver/` | Brute-force, alpha-beta DD solver, transposition table |
+| Solvers | `solver/` | Brute-force, alpha-beta DD solver, transposition table, regression eval |
 | Belief | `belief/` | Observation model, constraint sampler, Bayesian tracker |
 | Search | `search/` | PIMC, Alpha-Mu |
 | Stats | `stats.rs` | Game statistics, batch runner |
 
 CLI lives at `crates/hearts-cli/src/main.rs`.
+
+Additional binaries in `crates/hearts-cli/src/bin/`:
+
+| Binary | Purpose |
+|--------|---------|
+| `generate_training_data` | Generate CSV of (features, paranoid score) pairs at 28 cards remaining |
+| `depth_bench` | Benchmark depth-limited vs full solve at 32/36/40 cards |
 
 ## Key Conventions
 
@@ -76,3 +88,13 @@ CLI lives at `crates/hearts-cli/src/main.rs`.
 - Move ordering + zero-score pruning is unsafe in Max^n (causes incorrect results).
 - Paranoid TT with bound types is deferred — alpha-beta pruning alone provides the main speedup.
 - All solvers take `&mut GameState` and use undo-based traversal (no cloning per node).
+
+## Regression Eval (`solver/eval.rs`)
+
+Approximates the paranoid solver at 28 cards remaining using a trained linear model so PIMC can search from 52 cards without full-solving to terminal.
+
+- **`eval_position(state, ai_player) -> f64`**: Extracts 29 features from a `GameState` and returns the dot product with trained weights.
+- **`paranoid_solve_depth_limited(state, ai_player, cutoff) -> f64`**: f64 alpha-beta search that calls `eval_position` at trick boundaries when `cards_remaining <= cutoff`. No TT (shallow search).
+- **`SolverType::ParanoidDepthLimited(28)`**: PIMC/Alpha-Mu variant using the depth-limited solver. CLI player type: `pimc-dl`.
+- **Training pipeline**: `cargo run --release --bin generate_training_data -- --samples N` → `python regression/train_eval.py` → paste weights into `eval.rs`.
+- **Current model**: Ridge regression (alpha=10), R²=0.34 on 1000 samples. Needs more data and moon special-casing (see `docs/regression_plan.md` Step 4).

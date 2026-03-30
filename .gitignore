@@ -1,6 +1,9 @@
 # Rust
 /target
 
+# Regression training data (regenerated)
+regression/data/
+
 # Python
 __pycache__/
 *.pyc

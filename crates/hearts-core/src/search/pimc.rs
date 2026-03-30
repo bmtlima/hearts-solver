@@ -18,6 +18,8 @@ use crate::types::Card;
 pub enum SolverType {
     MaxN,
     Paranoid,
+    /// Paranoid with regression eval cutoff at the given card count.
+    ParanoidDepthLimited(u32),
 }
 
 /// Choose the best card via PIMC — sequential version.
@@ -169,6 +171,9 @@ pub fn evaluate_move(
             let scores = maxn::maxn_solve(&mut eval_state);
             scores[player.index()]
         }
+        SolverType::ParanoidDepthLimited(cutoff) => {
+            paranoid::paranoid_solve_depth_limited(&mut eval_state, player, cutoff) as i32
+        }
     }
 }
 
@@ -196,6 +201,9 @@ fn evaluate_move_with_tt(
             let mut tt = TranspositionTable::new(16);
             let scores = maxn::maxn_solve_with_tt(&mut eval_state, &mut tt, &keys);
             scores[player.index()]
+        }
+        SolverType::ParanoidDepthLimited(cutoff) => {
+            paranoid::paranoid_solve_depth_limited(&mut eval_state, player, cutoff) as i32
         }
     }
 }
