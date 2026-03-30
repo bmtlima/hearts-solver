@@ -197,17 +197,25 @@ fn main() {
             let features = extract_features(state, ai_player);
 
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if n % 100 == 0 {
+            if n % 10 == 0 || n == total {
                 let elapsed = start.elapsed().as_secs_f64();
-                eprintln!(
-                    "  Solved {}/{} ({:.1} samples/sec, {:.1}s elapsed)",
-                    n, total, n as f64 / elapsed, elapsed
+                let rate = n as f64 / elapsed;
+                let eta = if rate > 0.0 { (total - n) as f64 / rate } else { 0.0 };
+                let pct = 100.0 * n as f64 / total as f64;
+                let bar_len = 30;
+                let filled = (bar_len as f64 * pct / 100.0) as usize;
+                let bar: String = "█".repeat(filled) + &"░".repeat(bar_len - filled);
+                eprint!(
+                    "\r  {} {:.0}% ({}/{}) {:.1}/s ETA {:.0}s   ",
+                    bar, pct, n, total, rate, eta
                 );
             }
 
             Sample { features, score }
         })
         .collect();
+
+    eprintln!(); // newline after progress bar
 
     // Write CSV
     let file = File::create(&args.output).expect("failed to create output file");
