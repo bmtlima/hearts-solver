@@ -1,8 +1,9 @@
+use crate::card_set::CardSet;
 use crate::game_state::GameState;
 use crate::trick::PlayerIndex;
 use crate::types::{Card, Rank, Suit};
 
-pub const FEATURE_COUNT: usize = 29;
+pub const FEATURE_COUNT: usize = 35;
 
 pub const FEATURE_NAMES: [&str; FEATURE_COUNT] = [
     "ai_points_taken",
@@ -34,10 +35,17 @@ pub const FEATURE_NAMES: [&str; FEATURE_COUNT] = [
     "ai_has_lead_x_top_card_count",
     "ai_took_all_penalties",
     "opp_took_all_penalties",
+    "qs_holder_other_spades",
+    "qs_holder_void_count",
+    "ai_can_lead_spades",
+    "ai_safe_card_count",
+    "ai_low_hearts",
+    "ai_can_lead_spades_x_qs_exposed",
 ];
 
-/// Trained weights from Ridge regression (alpha=10.0) on 1000 samples.
-/// Layout: [bias, weight_0, weight_1, ..., weight_28]
+/// Trained weights — first 29 from Ridge regression (alpha=10.0) on 1000 samples.
+/// New features 29-34 are placeholders (0.0) until retrained.
+/// Layout: [bias, weight_0, weight_1, ..., weight_34]
 pub const EVAL_WEIGHTS: [f64; FEATURE_COUNT + 1] = [
     // bias
     11.20764576,
@@ -99,9 +107,21 @@ pub const EVAL_WEIGHTS: [f64; FEATURE_COUNT + 1] = [
     -0.6096681491,
     // opp_took_all_penalties
     0.6491504831,
+    // qs_holder_other_spades
+    0.0,
+    // qs_holder_void_count
+    0.0,
+    // ai_can_lead_spades
+    0.0,
+    // ai_safe_card_count
+    0.0,
+    // ai_low_hearts
+    0.0,
+    // ai_can_lead_spades_x_qs_exposed
+    0.0,
 ];
 
-/// Extract all 29 features from a game state for the given AI player.
+/// Extract all 35 features from a game state for the given AI player.
 pub fn extract_features(state: &GameState, ai_player: PlayerIndex) -> [f64; FEATURE_COUNT] {
     let ai = ai_player.index();
     let ai_hand = state.hands[ai];
@@ -139,7 +159,8 @@ pub fn extract_features(state: &GameState, ai_player: PlayerIndex) -> [f64; FEAT
     let ai_has_qs_protected = (has_qs && ai_spade_count_raw >= 4) as i32 as f64;
     let ai_has_as = ai_hand.contains(as_card) as i32 as f64;
     let ai_has_ks = ai_hand.contains(ks) as i32 as f64;
-    let qs_already_played = state.cards_played.contains(qs) as i32 as f64;
+    let qs_played = state.cards_played.contains(qs);
+    let qs_already_played = qs_played as i32 as f64;
     let ai_spade_count = ai_spade_count_raw as f64;
 
     // ── Heart exposure ──────────────────────────────────────────────────
@@ -232,6 +253,73 @@ pub fn extract_features(state: &GameState, ai_player: PlayerIndex) -> [f64; FEAT
         .iter()
         .any(|&p| p != ai_player && state.could_shoot_moon(p)) as i32 as f64;
 
+    // ── Q♠ holder analysis ──────────────────────────────────────────────
+    let (qs_holder_other_spades, qs_holder_void_count) = if qs_played {
+        (0.0, 0.0)
+    } else {
+        // Find who holds Q♠
+        let mut holder_other_spades = 0.0;
+        let mut holder_voids = 0.0;
+        for p in PlayerIndex::all() {
+            if state.hands[p.index()].contains(qs) {
+                let spades = state.hands[p.index()].cards_of_suit(Suit::Spades).count();
+                holder_other_spades = (spades - 1) as f64; // exclude Q♠ itself
+                holder_voids = Suit::ALL
+                    .iter()
+                    .filter(|&&s| !state.hands[p.index()].has_suit(s))
+                    .count() as f64;
+                break;
+            }
+        }
+        (holder_other_spades, holder_voids)
+    };
+
+    // ── AI can lead spades ──────────────────────────────────────────────
+    let ai_can_lead_spades = (state.current_player == ai_player
+        && ai_hand.has_suit(Suit::Spades)
+        && !ai_hand.contains(qs)) as i32 as f64;
+
+    // ── Safe card count (cards guaranteed to lose) ──────────────────────
+    let mut ai_safe_card_count = 0u32;
+    let opp_combined = {
+        let mut combined = CardSet::empty();
+        for p in PlayerIndex::all() {
+            if p != ai_player {
+                combined = combined | state.hands[p.index()];
+            }
+        }
+        combined
+    };
+    for suit in Suit::ALL {
+        let opp_suit = opp_combined.cards_of_suit(suit);
+        if opp_suit.is_empty() {
+            // No opponents have this suit — AI's cards would win, not safe
+            continue;
+        }
+        // Find the minimum opponent rank in this suit
+        let opp_min_rank = opp_suit.cards().next().unwrap().rank(); // cards() iterates low→high
+        for card in ai_hand.cards_of_suit(suit).cards() {
+            if card.rank() < opp_min_rank {
+                ai_safe_card_count += 1;
+            }
+        }
+    }
+
+    // ── Low hearts (safe hearts specifically) ───────────────────────────
+    let ai_low_hearts = if opp_hearts.is_empty() {
+        0.0
+    } else {
+        let opp_min_heart_rank = opp_hearts.cards().next().unwrap().rank();
+        ai_hearts
+            .cards()
+            .filter(|c| c.rank() < opp_min_heart_rank)
+            .count() as f64
+    };
+
+    // ── Interaction: AI can lead spades × Q♠ holder exposed ─────────────
+    let qs_holder_exposed = (!qs_played && qs_holder_other_spades == 0.0) as i32 as f64;
+    let ai_can_lead_spades_x_qs_exposed = ai_can_lead_spades * qs_holder_exposed;
+
     [
         ai_points_taken,                   // 0
         opp_max_points as f64,             // 1
@@ -262,6 +350,12 @@ pub fn extract_features(state: &GameState, ai_player: PlayerIndex) -> [f64; FEAT
         ai_has_lead_x_top_card_count,     // 26
         ai_took_all_penalties,             // 27
         opp_took_all_penalties,            // 28
+        qs_holder_other_spades,            // 29
+        qs_holder_void_count,              // 30
+        ai_can_lead_spades,                // 31
+        ai_safe_card_count as f64,         // 32
+        ai_low_hearts,                     // 33
+        ai_can_lead_spades_x_qs_exposed,  // 34
     ]
 }
 
@@ -279,7 +373,9 @@ pub fn eval_position(state: &GameState, ai_player: PlayerIndex) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::card_set::CardSet;
     use crate::deck::DeckConfig;
+    use crate::trick::PlayerIndex;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
@@ -363,7 +459,7 @@ mod tests {
             assert_eq!(f[3], f[14]); // hearts_remaining == hearts_in_play
 
             // Binary features: 0 or 1
-            for &idx in &[4, 5, 6, 7, 8, 9, 13, 21, 27, 28] {
+            for &idx in &[4, 5, 6, 7, 8, 9, 13, 21, 27, 28, 31] {
                 assert!(f[idx] == 0.0 || f[idx] == 1.0, "feature {} = {} not binary", idx, f[idx]);
             }
 
@@ -376,6 +472,13 @@ mod tests {
             assert!(f[17] >= 0.0 && f[17] <= 4.0); // ai_top2_card_count
             assert!(f[18] >= 0.0 && f[18] <= 12.0); // opp_void_count (3 opps × 4 suits)
             assert!(f[19] >= 1.0); // ai_longest_suit (must have at least 1 card)
+
+            // New features: non-negative
+            assert!(f[29] >= 0.0); // qs_holder_other_spades
+            assert!(f[30] >= 0.0 && f[30] <= 3.0); // qs_holder_void_count
+            assert!(f[32] >= 0.0); // ai_safe_card_count
+            assert!(f[33] >= 0.0); // ai_low_hearts
+            assert!(f[34] == 0.0 || f[34] == 1.0); // interaction binary
         }
     }
 
@@ -399,5 +502,80 @@ mod tests {
             // exposed and protected are mutually exclusive
             assert!(!(f[5] == 1.0 && f[6] == 1.0));
         }
+    }
+
+    #[test]
+    fn new_features_qs_holder_exposed_with_lead() {
+        // Construct a state where:
+        // - P1 holds Q♠ with no other spades
+        // - P0 (AI) has the lead and holds a spade (not Q♠)
+        let hands = [
+            // P0 (AI): Ks, 2c, 3c, 4c, 5c, 6c, 7c (has spade, no Qs)
+            CardSet::from_cards([
+                Card::new(Suit::Spades, Rank::King),
+                Card::new(Suit::Clubs, Rank::Two),
+                Card::new(Suit::Clubs, Rank::Three),
+                Card::new(Suit::Clubs, Rank::Four),
+                Card::new(Suit::Clubs, Rank::Five),
+                Card::new(Suit::Clubs, Rank::Six),
+                Card::new(Suit::Clubs, Rank::Seven),
+            ]),
+            // P1: Qs alone (no other spades), plus diamonds
+            CardSet::from_cards([
+                Card::new(Suit::Spades, Rank::Queen),
+                Card::new(Suit::Diamonds, Rank::Two),
+                Card::new(Suit::Diamonds, Rank::Three),
+                Card::new(Suit::Diamonds, Rank::Four),
+                Card::new(Suit::Diamonds, Rank::Five),
+                Card::new(Suit::Diamonds, Rank::Six),
+                Card::new(Suit::Diamonds, Rank::Seven),
+            ]),
+            // P2: hearts
+            CardSet::from_cards([
+                Card::new(Suit::Hearts, Rank::Two),
+                Card::new(Suit::Hearts, Rank::Three),
+                Card::new(Suit::Hearts, Rank::Four),
+                Card::new(Suit::Hearts, Rank::Five),
+                Card::new(Suit::Hearts, Rank::Six),
+                Card::new(Suit::Hearts, Rank::Seven),
+                Card::new(Suit::Hearts, Rank::Eight),
+            ]),
+            // P3: mixed
+            CardSet::from_cards([
+                Card::new(Suit::Spades, Rank::Ace),
+                Card::new(Suit::Diamonds, Rank::Ace),
+                Card::new(Suit::Clubs, Rank::Ace),
+                Card::new(Suit::Hearts, Rank::Ace),
+                Card::new(Suit::Hearts, Rank::King),
+                Card::new(Suit::Hearts, Rank::Queen),
+                Card::new(Suit::Hearts, Rank::Jack),
+            ]),
+        ];
+
+        let mut state = GameState::new(hands, DeckConfig::Full, PlayerIndex::P0);
+        state.is_first_trick = false; // past first trick
+
+        let f = extract_features(&state, PlayerIndex::P0);
+
+        // Q♠ holder (P1) has 0 other spades
+        assert_eq!(f[29], 0.0, "qs_holder_other_spades");
+
+        // Q♠ holder (P1) has: Qs+diamonds = spades+diamonds, void in clubs and hearts
+        assert_eq!(f[30], 2.0, "qs_holder_void_count");
+
+        // AI (P0) has lead, has a spade (Ks), doesn't hold Qs
+        assert_eq!(f[31], 1.0, "ai_can_lead_spades");
+
+        // Interaction: AI can lead spades AND Q♠ holder has 0 other spades
+        assert_eq!(f[34], 1.0, "ai_can_lead_spades_x_qs_exposed");
+
+        // ai_safe_card_count: P0 has 2c..7c in clubs. Opponents' lowest club is Ac (P3).
+        // All of P0's clubs (2-7) are below Ac, so 6 safe clubs.
+        // P0 has Ks in spades. Opponents have Qs (P1) and As (P3). Qs rank < Ks, so Ks is not safe.
+        // Total safe = 6
+        assert_eq!(f[32], 6.0, "ai_safe_card_count");
+
+        // ai_low_hearts: P0 has no hearts, so 0
+        assert_eq!(f[33], 0.0, "ai_low_hearts");
     }
 }
